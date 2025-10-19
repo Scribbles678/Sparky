@@ -64,13 +64,14 @@ class TradeExecutor {
     logger.info(`Opening ${side} position for ${symbol}`);
 
     try {
-      // Step 1: Check and close existing position if exists
+      // Step 1: Check if position already exists - if yes, skip this alert
       if (this.tracker.hasPosition(symbol)) {
-        logger.info(`Existing position found for ${symbol}, closing first`);
-        await this.closePosition(symbol);
-        
-        // Wait a moment for the close to propagate
-        await this.sleep(1000);
+        logger.info(`Position already exists for ${symbol}, ignoring alert`);
+        return {
+          success: false,
+          action: 'skipped',
+          message: `Position already open for ${symbol}. Close it first or wait for TP/SL.`,
+        };
       }
 
       // Step 2: Check available margin (optional, for safety)
