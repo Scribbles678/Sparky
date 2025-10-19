@@ -13,12 +13,12 @@ class AsterAPI {
 
   /**
    * Generate HMAC signature for authentication
+   * Signature is based on query string parameters as per Aster API docs
    */
-  generateSignature(timestamp, method, path, body = '') {
-    const message = timestamp + method.toUpperCase() + path + body;
+  generateSignature(queryString) {
     const signature = crypto
       .createHmac('sha256', this.apiSecret)
-      .update(message)
+      .update(queryString)
       .digest('hex');
     
     return signature;
@@ -29,26 +29,35 @@ class AsterAPI {
    */
   async makeRequest(method, endpoint, data = null, retryCount = 0) {
     const startTime = Date.now();
-    const timestamp = Date.now().toString();
-    const path = endpoint;
-    const body = data ? JSON.stringify(data) : '';
+    const timestamp = Date.now();
     
-    const signature = this.generateSignature(timestamp, method, path, body);
+    // Build query parameters (for GET requests or all authenticated requests)
+    let queryParams = `timestamp=${timestamp}`;
+    
+    // For POST with data, add to query string or body based on method
+    if (data && method === 'GET') {
+      // For GET, all params go in query string
+      const dataParams = new URLSearchParams(data).toString();
+      queryParams = `${dataParams}&${queryParams}`;
+    }
+    
+    // Generate signature from query parameters
+    const signature = this.generateSignature(queryParams);
+    queryParams += `&signature=${signature}`;
     
     const headers = {
       'X-MBX-APIKEY': this.apiKey,
-      'X-MBX-SIGNATURE': signature,
-      'X-MBX-TIMESTAMP': timestamp,
       'Content-Type': 'application/json',
     };
 
     const config = {
       method,
-      url: `${this.apiUrl}${endpoint}`,
+      url: `${this.apiUrl}${endpoint}?${queryParams}`,
       headers,
     };
 
-    if (data) {
+    // For POST/PUT/DELETE, data goes in body
+    if (data && method !== 'GET') {
       config.data = data;
     }
 
