@@ -31,17 +31,23 @@ class AsterAPI {
     const startTime = Date.now();
     const timestamp = Date.now();
     
-    // Build query parameters (for GET requests or all authenticated requests)
-    let queryParams = `timestamp=${timestamp}`;
+    // Build query parameters - ALL parameters must be in query string for signature
+    let queryParams = '';
     
-    // For POST with data, add to query string or body based on method
-    if (data && method === 'GET') {
-      // For GET, all params go in query string
+    // Add data parameters first (if any)
+    if (data) {
       const dataParams = new URLSearchParams(data).toString();
-      queryParams = `${dataParams}&${queryParams}`;
+      queryParams = dataParams;
     }
     
-    // Generate signature from query parameters
+    // Add timestamp (always required)
+    if (queryParams) {
+      queryParams += `&timestamp=${timestamp}`;
+    } else {
+      queryParams = `timestamp=${timestamp}`;
+    }
+    
+    // Generate signature from ALL query parameters
     const signature = this.generateSignature(queryParams);
     queryParams += `&signature=${signature}`;
     
@@ -56,10 +62,8 @@ class AsterAPI {
       headers,
     };
 
-    // For POST/PUT/DELETE, data goes in body
-    if (data && method !== 'GET') {
-      config.data = data;
-    }
+    // Note: For Binance-style APIs, all params go in query string, not body
+    // The body should be empty even for POST requests
 
     try {
       const response = await axios(config);
