@@ -186,6 +186,12 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
   
   try {
     const alertData = req.body;
+    
+    // Debug: Log received data
+    logger.info('Webhook received', {
+      body: JSON.stringify(alertData),
+      contentType: req.get('content-type'),
+    });
 
     // Validate webhook secret
     if (!alertData.secret || alertData.secret !== WEBHOOK_SECRET) {
@@ -225,10 +231,11 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
 
     // Additional validation for buy/sell actions
     if (['buy', 'sell'].includes(alertData.action.toLowerCase())) {
-      if (!alertData.price) {
+      // Price is only required for LIMIT orders
+      if (alertData.orderType && alertData.orderType.toUpperCase() === 'LIMIT' && !alertData.price) {
         return res.status(400).json({
           success: false,
-          error: 'Missing required field: price (for buy/sell actions)',
+          error: 'Missing required field: price (required for LIMIT orders)',
         });
       }
     }
