@@ -1,14 +1,14 @@
 # Sparky Trading Bot 🚀
 
-A headless trading bot that receives TradingView webhook alerts and executes trades on Aster DEX futures with leverage-adjusted stop loss and take profit.
+A headless trading bot that receives TradingView webhook alerts and executes trades on Aster DEX futures with simple percentage-based stop loss and take profit.
 
 ## Features
 
 - 🔔 Receives TradingView webhook alerts via HTTP
 - 📊 Executes market/limit orders on Aster DEX
-- 🛡️ **Leverage-adjusted stop loss and take profit** (profit/loss based on margin, not price)
+- 🛡️ **Simple percentage-based stop loss and take profit** (% of position value)
 - 📈 Position management (1 position per symbol, closes existing before opening new)
-- ⚙️ Configurable leverage per symbol (set via Aster API)
+- 💰 Fixed position sizing ($100 per trade by default)
 - 🔐 HMAC-SHA256 authentication for Aster API
 - 📝 Comprehensive logging with Winston
 - 🔄 Auto-restart with PM2
@@ -61,12 +61,6 @@ Edit `config.json`:
 ```json
 {
   "tradeAmount": 100,
-  "leverage": {
-    "BTCUSDT": 20,
-    "ETHUSDT": 5,
-    "SOLUSDT": 10,
-    "default": 5
-  },
   "webhookSecret": "your_webhook_secret_here",
   "aster": {
     "apiUrl": "https://fapi.asterdex.com",
@@ -74,11 +68,18 @@ Edit `config.json`:
     "apiSecret": "your_api_secret"
   },
   "riskManagement": {
-    "maxPositions": 10,
-    "minMarginPercent": 20
+    "maxPositions": 10
   }
 }
 ```
+
+**Configuration:**
+- `tradeAmount`: Fixed position size in dollars (e.g., 100 = $100 position per trade)
+- `webhookSecret`: Secret token for TradingView webhook authentication
+- `aster`: Your Aster DEX API credentials
+- `riskManagement.maxPositions`: Maximum number of concurrent positions
+
+**Note:** Set your desired leverage (e.g., 25x) directly on the Aster DEX exchange. The bot will use whatever leverage is configured there.
 
 ## Usage
 
@@ -101,18 +102,15 @@ pm2 startup
 
 ## TradingView Webhook Setup
 
-### Understanding Leverage-Adjusted TP/SL ⚡
+### Understanding Simple TP/SL 💡
 
-**Important:** The `stopLoss` and `takeProfit` values represent **percentage profit/loss on your margin**, NOT price movement.
+**The `stopLoss` and `takeProfit` values are simple price movement percentages.**
 
-The bot automatically converts these to price movements using your leverage:
-```
-Price Move % = Desired Margin % ÷ Leverage
-```
+With a $100 position (your `tradeAmount`):
+- `"stopLoss": 2` → 2% price move against you = **$2 loss**
+- `"takeProfit": 5` → 5% price move in your favor = **$5 profit**
 
-**Example with $100 margin at 5x leverage:**
-- `"stopLoss": 20` → 20% loss on margin = **$20 loss** → 4% price move
-- `"takeProfit": 50` → 50% profit on margin = **$50 profit** → 10% price move
+It's that simple! No leverage calculations needed.
 
 ### 1. Alert Format for Opening Positions
 
@@ -123,8 +121,8 @@ Price Move % = Desired Margin % ÷ Leverage
   "symbol": "ETHUSDT",
   "action": "BUY",
   "orderType": "MARKET",
-  "stopLoss": 20,
-  "takeProfit": 50
+  "stopLoss": 2,
+  "takeProfit": 5
 }
 ```
 
@@ -135,8 +133,8 @@ Price Move % = Desired Margin % ÷ Leverage
   "symbol": "BTCUSDT",
   "action": "SELL",
   "order_type": "market",
-  "stop_loss_percent": 20,
-  "take_profit_percent": 50
+  "stop_loss_percent": 2,
+  "take_profit_percent": 5
 }
 ```
 
@@ -148,8 +146,8 @@ Price Move % = Desired Margin % ÷ Leverage
   "action": "BUY",
   "orderType": "LIMIT",
   "price": 3500,
-  "stopLoss": 20,
-  "takeProfit": 50
+  "stopLoss": 2,
+  "takeProfit": 5
 }
 ```
 
@@ -178,11 +176,11 @@ bearSignal = ta.crossunder(fastMA, slowMA)
 
 if bullSignal
     strategy.entry("Long", strategy.long)
-    alert('{"secret":"your-webhook-secret","symbol":"ETHUSDT","action":"BUY","orderType":"MARKET","stopLoss":20,"takeProfit":50}', alert.freq_once_per_bar)
+    alert('{"secret":"your-webhook-secret","symbol":"ETHUSDT","action":"BUY","orderType":"MARKET","stopLoss":2,"takeProfit":5}', alert.freq_once_per_bar)
 
 if bearSignal
     strategy.entry("Short", strategy.short)
-    alert('{"secret":"your-webhook-secret","symbol":"ETHUSDT","action":"SELL","orderType":"MARKET","stopLoss":20,"takeProfit":50}', alert.freq_once_per_bar)
+    alert('{"secret":"your-webhook-secret","symbol":"ETHUSDT","action":"SELL","orderType":"MARKET","stopLoss":2,"takeProfit":5}', alert.freq_once_per_bar)
 ```
 
 ### 4. Webhook URL
@@ -207,59 +205,57 @@ http://your-domain.com/webhook
 
 1. **Webhook Received** → Validate secret and payload
 2. **Check Existing Position** → Close if exists for same symbol (waits 1s)
-3. **Set Leverage** → Calls `/fapi/v1/leverage` endpoint
-4. **Check Margin** → Verify sufficient available margin
-5. **Fetch Price** → Get current market price (for MARKET orders)
-6. **Calculate Position Size** → Based on fixed amount × leverage
-7. **Open Position** → Execute market/limit order
-8. **Place Stop Loss** → STOP_MARKET order with reduceOnly
-9. **Place Take Profit** → TAKE_PROFIT_MARKET order with reduceOnly
-10. **Track Position** → Store in memory for management
+3. **Check Margin** → Verify sufficient available margin
+4. **Fetch Price** → Get current market price (for MARKET orders)
+5. **Calculate Position Size** → `quantity = tradeAmount / price`
+6. **Open Position** → Execute market/limit order (exchange uses its leverage setting)
+7. **Place Stop Loss** → STOP_MARKET order with reduceOnly
+8. **Place Take Profit** → TAKE_PROFIT_MARKET order with reduceOnly
+9. **Track Position** → Store in memory for management
 
 ## Position Sizing & TP/SL Calculation
 
 ### Position Size Formula
 ```javascript
-// Example: $100 margin, 5x leverage, ETH at $4,000
-const notionalValue = $100 × 5 = $500
-const quantity = $500 / $4,000 = 0.125 ETH (rounded to 0.013 ETH for precision)
+// Example: $100 position, ETH at $4,000
+const quantity = $100 / $4,000 = 0.025 ETH (rounded to 0.025 for precision)
 ```
 
-### Leverage-Adjusted TP/SL Formula
+**That's it!** No leverage multiplication needed. The exchange handles margin requirements based on your leverage settings.
+
+### Simple TP/SL Formula
 
 **For Take Profit:**
 ```javascript
-// You want 50% profit on $100 margin with 5x leverage
-const marginProfitPercent = 50  // 50% = $50 profit
-const priceMovePct = marginProfitPercent / leverage  // 50 / 5 = 10%
+// You want 5% profit on $100 position
+const takeProfitPercent = 5  // 5% price move = $5 profit
 
 // LONG: TP above entry
-takeProfitPrice = entryPrice × (1 + 0.10)  // $4,000 × 1.10 = $4,400
+takeProfitPrice = entryPrice × (1 + 0.05)  // $4,000 × 1.05 = $4,200
 
 // SHORT: TP below entry
-takeProfitPrice = entryPrice × (1 - 0.10)  // $4,000 × 0.90 = $3,600
+takeProfitPrice = entryPrice × (1 - 0.05)  // $4,000 × 0.95 = $3,800
 ```
 
 **For Stop Loss:**
 ```javascript
-// You risk 20% loss on $100 margin with 5x leverage
-const marginLossPercent = 20  // 20% = $20 loss
-const priceMovePct = marginLossPercent / leverage  // 20 / 5 = 4%
+// You risk 2% loss on $100 position
+const stopLossPercent = 2  // 2% price move = $2 loss
 
 // LONG: SL below entry
-stopLossPrice = entryPrice × (1 - 0.04)  // $4,000 × 0.96 = $3,840
+stopLossPrice = entryPrice × (1 - 0.02)  // $4,000 × 0.98 = $3,920
 
 // SHORT: SL above entry
-stopLossPrice = entryPrice × (1 + 0.04)  // $4,000 × 1.04 = $4,160
+stopLossPrice = entryPrice × (1 + 0.02)  // $4,000 × 1.02 = $4,080
 ```
 
-### TP/SL Examples by Leverage
+### TP/SL Examples with $100 Position
 
-| Leverage | Margin | Stop Loss (20%) | Take Profit (50%) |
-|----------|--------|-----------------|-------------------|
-| 5x | $100 | $20 loss (4% price) | $50 profit (10% price) |
-| 10x | $100 | $20 loss (2% price) | $50 profit (5% price) |
-| 20x | $100 | $20 loss (1% price) | $50 profit (2.5% price) |
+| Entry Price | Stop Loss (2%) | Take Profit (5%) | Risk | Reward | R:R |
+|-------------|----------------|------------------|------|--------|-----|
+| $4,000 | $3,920 (-$2) | $4,200 (+$5) | $2 | $5 | 1:2.5 |
+| $60,000 | $58,800 (-$2) | $63,000 (+$5) | $2 | $5 | 1:2.5 |
+| $150 | $147 (-$2) | $157.50 (+$5) | $2 | $5 | 1:2.5 |
 
 ## DigitalOcean Deployment
 
@@ -485,8 +481,8 @@ curl -X POST http://localhost:3000/webhook \
     "symbol": "ETHUSDT",
     "action": "BUY",
     "orderType": "MARKET",
-    "stopLoss": 20,
-    "takeProfit": 50
+    "stopLoss": 2,
+    "takeProfit": 5
   }'
 ```
 
@@ -501,7 +497,7 @@ sparky-bot/
 │   ├── positionTracker.js    # Track open positions in memory
 │   └── utils/
 │       ├── logger.js         # Winston logger configuration
-│       └── calculations.js   # Position size & leverage-adjusted TP/SL
+│       └── calculations.js   # Position size & simple TP/SL calculations
 ├── test/
 │   └── testWebhook.js        # Local webhook testing
 ├── logs/                     # Log files (auto-created)
@@ -533,12 +529,13 @@ sparky-bot/
 1. Check API credentials in `.env`
 2. Verify sufficient margin in Aster account
 3. Check logs for errors: `tail -50 logs/error.log`
-4. Verify leverage is set correctly for symbol
+4. Verify leverage is set on the exchange (e.g., 25x for max)
 
 ### TP/SL triggering too fast/slow
-- Remember: values are **margin profit/loss %**, not price %
-- Adjust based on your leverage and risk tolerance
-- Example: With 5x leverage, `stopLoss: 20` = 4% price move
+- Values are simple **price movement percentages**
+- `stopLoss: 2` = 2% price move against you
+- `takeProfit: 5` = 5% price move in your favor
+- Adjust based on asset volatility and your risk tolerance
 
 ### Signature errors
 - Verify API key and secret are correct
@@ -590,4 +587,4 @@ MIT License - see LICENSE file for details
 - The developers assume NO liability for trading losses
 - Use at your own risk
 
-**Remember:** Leverage amplifies both gains AND losses. A 20% adverse price move with 5x leverage = 100% loss of margin.
+**Remember:** Leverage amplifies both gains AND losses. Always use appropriate stop losses and never risk more than you can afford to lose.

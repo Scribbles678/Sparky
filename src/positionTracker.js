@@ -113,7 +113,6 @@ class PositionTracker {
         side: p.side,
         quantity: p.quantity,
         entryPrice: p.entryPrice,
-        leverage: p.leverage,
         timestamp: new Date(p.timestamp).toISOString(),
       })),
     };
@@ -142,7 +141,6 @@ class PositionTracker {
             side,
             quantity: Math.abs(positionAmt),
             entryPrice: parseFloat(pos.entryPrice),
-            leverage: parseInt(pos.leverage),
             orderId: null, // Unknown after restart
             stopLossOrderId: null,
             takeProfitOrderId: null,

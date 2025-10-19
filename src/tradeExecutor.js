@@ -6,7 +6,6 @@ const {
   getOppositeSide,
   roundPrice,
   roundQuantity,
-  hassufficientMargin,
 } = require('./utils/calculations');
 
 class TradeExecutor {
@@ -74,20 +73,13 @@ class TradeExecutor {
         await this.sleep(1000);
       }
 
-      // Step 2: Get leverage for symbol
-      const leverage = this.config.leverage[symbol] || this.config.leverage.default;
-
-      // Step 3: Check available margin
+      // Step 2: Check available margin (optional, for safety)
       const availableMargin = await this.api.getAvailableMargin();
-      const requiredMargin = this.config.tradeAmount;
+      const requiredPositionSize = this.config.tradeAmount;
 
-      if (!hassufficientMargin(availableMargin, requiredMargin, this.config.riskManagement?.minMarginPercent || 20)) {
-        throw new Error(`Insufficient margin. Available: ${availableMargin}, Required: ${requiredMargin}`);
-      }
+      logger.info(`Available margin: ${availableMargin}, Position size: ${requiredPositionSize}`);
 
-      logger.info(`Margin check passed. Available: ${availableMargin}, Required: ${requiredMargin}`);
-
-      // Step 4: Get current market price if not provided (for MARKET orders)
+      // Step 3: Get current market price if not provided (for MARKET orders)
       let entryPrice = price;
       if (!entryPrice || finalOrderType === 'market') {
         const ticker = await this.api.getTicker(symbol);
@@ -95,20 +87,19 @@ class TradeExecutor {
         logger.info(`Fetched current market price for ${symbol}: ${entryPrice}`);
       }
       
-      // Step 4b: Calculate position size
-      
-      const quantity = calculatePositionSize(this.config.tradeAmount, leverage, entryPrice);
+      // Step 4: Calculate position size (simple: position value / price)
+      const quantity = calculatePositionSize(this.config.tradeAmount, entryPrice);
       const roundedQuantity = roundQuantity(quantity);
 
-      logger.info(`Position size calculated: ${roundedQuantity} at ${entryPrice} (${leverage}x)`);
+      logger.info(`Position size calculated: ${roundedQuantity} at ${entryPrice} ($${this.config.tradeAmount} position)`);
 
-      // Step 5: Place entry order
+      // Step 5: Place entry order (exchange will use its max leverage setting)
       let orderResult;
       
       if (finalOrderType === 'market') {
-        orderResult = await this.api.placeMarketOrder(symbol, side, roundedQuantity, leverage);
+        orderResult = await this.api.placeMarketOrder(symbol, side, roundedQuantity);
       } else {
-        orderResult = await this.api.placeLimitOrder(symbol, side, roundedQuantity, entryPrice, leverage);
+        orderResult = await this.api.placeLimitOrder(symbol, side, roundedQuantity, entryPrice);
       }
 
       logger.logTrade('opened', symbol, {
@@ -116,7 +107,6 @@ class TradeExecutor {
         side,
         quantity: roundedQuantity,
         price: entryPrice,
-        leverage,
       });
 
       // Step 6: Place stop loss
@@ -124,7 +114,7 @@ class TradeExecutor {
       
       if (finalStopLoss) {
         try {
-          const stopPrice = calculateStopLoss(side, entryPrice, finalStopLoss, leverage);
+          const stopPrice = calculateStopLoss(side, entryPrice, finalStopLoss);
           const roundedStopPrice = roundPrice(stopPrice);
           const stopSide = getOppositeSide(side);
 
@@ -137,11 +127,12 @@ class TradeExecutor {
 
           stopLossOrderId = stopLossResult.orderId;
           
+          const dollarLoss = (this.config.tradeAmount * finalStopLoss / 100).toFixed(2);
+          
           logger.info(`Stop loss placed at ${roundedStopPrice}`, {
             orderId: stopLossOrderId,
             percent: finalStopLoss,
-            leverage: leverage,
-            priceMovePct: (finalStopLoss / leverage).toFixed(2) + '%',
+            dollarAmount: `$${dollarLoss}`,
           });
         } catch (error) {
           logger.logError('Failed to place stop loss', error, { symbol });
@@ -154,7 +145,7 @@ class TradeExecutor {
       
       if (finalTakeProfit) {
         try {
-          const tpPrice = calculateTakeProfit(side, entryPrice, finalTakeProfit, leverage);
+          const tpPrice = calculateTakeProfit(side, entryPrice, finalTakeProfit);
           const roundedTpPrice = roundPrice(tpPrice);
           const tpSide = getOppositeSide(side);
 
@@ -167,11 +158,12 @@ class TradeExecutor {
 
           takeProfitOrderId = takeProfitResult.orderId;
           
+          const dollarProfit = (this.config.tradeAmount * finalTakeProfit / 100).toFixed(2);
+          
           logger.info(`Take profit placed at ${roundedTpPrice}`, {
             orderId: takeProfitOrderId,
             percent: finalTakeProfit,
-            leverage: leverage,
-            priceMovePct: (finalTakeProfit / leverage).toFixed(2) + '%',
+            dollarAmount: `$${dollarProfit}`,
           });
         } catch (error) {
           logger.logError('Failed to place take profit', error, { symbol });
@@ -184,12 +176,11 @@ class TradeExecutor {
         side,
         quantity: roundedQuantity,
         entryPrice,
-        leverage,
         orderId: orderResult.orderId,
         stopLossOrderId,
         takeProfitOrderId,
-        stopLossPercent: stop_loss_percent,
-        takeProfitPercent: take_profit_percent,
+        stopLossPercent: finalStopLoss,
+        takeProfitPercent: finalTakeProfit,
       });
 
       logger.info(`Position opened successfully for ${symbol}`);

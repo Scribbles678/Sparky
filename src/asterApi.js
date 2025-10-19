@@ -196,12 +196,7 @@ class AsterAPI {
   /**
    * Place market order
    */
-  async placeMarketOrder(symbol, side, quantity, leverage) {
-    // Set leverage first (if provided)
-    if (leverage) {
-      await this.setLeverage(symbol, leverage);
-    }
-    
+  async placeMarketOrder(symbol, side, quantity) {
     const orderData = {
       symbol,
       side: side.toUpperCase(),
@@ -215,12 +210,7 @@ class AsterAPI {
   /**
    * Place limit order
    */
-  async placeLimitOrder(symbol, side, quantity, price, leverage) {
-    // Set leverage first (if provided)
-    if (leverage) {
-      await this.setLeverage(symbol, leverage);
-    }
-    
+  async placeLimitOrder(symbol, side, quantity, price) {
     const orderData = {
       symbol,
       side: side.toUpperCase(),

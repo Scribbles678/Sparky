@@ -22,12 +22,6 @@ try {
     logger.warn('config.json not found, using environment variables only');
     config = {
       tradeAmount: parseFloat(process.env.TRADE_AMOUNT) || 100,
-      leverage: {
-        BTCUSDT: 20,
-        ETHUSDT: 20,
-        SOLUSDT: 10,
-        default: 5,
-      },
       webhookSecret: process.env.WEBHOOK_SECRET,
       aster: {
         apiUrl: process.env.ASTER_API_URL || 'https://api.aster.finance',
@@ -36,7 +30,6 @@ try {
       },
       riskManagement: {
         maxPositions: 10,
-        minMarginPercent: 20,
       },
     };
   }
@@ -302,8 +295,7 @@ const server = app.listen(PORT, async () => {
   logger.info(`🚀 Sparky Trading Bot started on port ${PORT}`);
   logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
   logger.info(`API URL: ${config.aster.apiUrl}`);
-  logger.info(`Trade amount: $${config.tradeAmount}`);
-  logger.info(`Default leverage: ${config.leverage.default}x`);
+  logger.info(`Position size: $${config.tradeAmount} per trade`);
   
   // Test API connection
   try {

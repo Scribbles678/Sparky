@@ -1,11 +1,5 @@
 {
   "tradeAmount": 100,
-  "leverage": {
-    "BTCUSDT": 20,
-    "ETHUSDT": 20,
-    "SOLUSDT": 10,
-    "default": 5
-  },
   "webhookSecret": "your-secret-token",
   "aster": {
     "apiUrl": "https://fapi.asterdex.com",
@@ -13,8 +7,7 @@
     "apiSecret": "YOUR_API_SECRET"
   },
   "riskManagement": {
-    "maxPositions": 10,
-    "minMarginPercent": 20
+    "maxPositions": 10
   }
 }
 

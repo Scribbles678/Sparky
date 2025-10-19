@@ -1,30 +1,27 @@
 /**
- * Calculate position size based on fixed amount and leverage
- * @param {number} tradeAmount - Fixed dollar amount to trade
- * @param {number} leverage - Leverage multiplier
+ * Calculate position size based on fixed dollar amount
+ * @param {number} tradeAmount - Fixed dollar amount to trade (position size)
  * @param {number} price - Entry price
  * @returns {number} Quantity to trade
  */
-function calculatePositionSize(tradeAmount, leverage, price) {
-  if (!tradeAmount || !leverage || !price || price <= 0) {
+function calculatePositionSize(tradeAmount, price) {
+  if (!tradeAmount || !price || price <= 0) {
     throw new Error('Invalid parameters for position size calculation');
   }
   
-  const notionalValue = tradeAmount * leverage;
-  const quantity = notionalValue / price;
+  const quantity = tradeAmount / price;
   
   return quantity;
 }
 
 /**
- * Calculate stop loss price (adjusted for leverage)
+ * Calculate stop loss price based on percentage of position value
  * @param {string} side - 'BUY' or 'SELL'
  * @param {number} entryPrice - Entry price
- * @param {number} stopLossPercent - Stop loss percentage (% loss on margin, not price)
- * @param {number} leverage - Leverage multiplier
+ * @param {number} stopLossPercent - Stop loss percentage (% of position value)
  * @returns {number} Stop loss price
  */
-function calculateStopLoss(side, entryPrice, stopLossPercent, leverage = 1) {
+function calculateStopLoss(side, entryPrice, stopLossPercent) {
   if (!side || !entryPrice || entryPrice <= 0) {
     throw new Error('Invalid parameters for stop loss calculation');
   }
@@ -33,18 +30,14 @@ function calculateStopLoss(side, entryPrice, stopLossPercent, leverage = 1) {
     throw new Error('Stop loss percent must be positive');
   }
   
-  // Convert margin loss % to price move % using leverage
-  // Price move % = Margin loss % / Leverage
-  const priceMovePct = stopLossPercent / leverage;
-  
   let stopPrice;
   
   if (side.toUpperCase() === 'BUY') {
     // Long position: stop loss below entry
-    stopPrice = entryPrice * (1 - priceMovePct / 100);
+    stopPrice = entryPrice * (1 - stopLossPercent / 100);
   } else if (side.toUpperCase() === 'SELL') {
     // Short position: stop loss above entry
-    stopPrice = entryPrice * (1 + priceMovePct / 100);
+    stopPrice = entryPrice * (1 + stopLossPercent / 100);
   } else {
     throw new Error('Invalid side. Must be BUY or SELL');
   }
@@ -53,14 +46,13 @@ function calculateStopLoss(side, entryPrice, stopLossPercent, leverage = 1) {
 }
 
 /**
- * Calculate take profit price (adjusted for leverage)
+ * Calculate take profit price based on percentage of position value
  * @param {string} side - 'BUY' or 'SELL'
  * @param {number} entryPrice - Entry price
- * @param {number} takeProfitPercent - Take profit percentage (% profit on margin, not price)
- * @param {number} leverage - Leverage multiplier
+ * @param {number} takeProfitPercent - Take profit percentage (% of position value)
  * @returns {number} Take profit price
  */
-function calculateTakeProfit(side, entryPrice, takeProfitPercent, leverage = 1) {
+function calculateTakeProfit(side, entryPrice, takeProfitPercent) {
   if (!side || !entryPrice || entryPrice <= 0) {
     throw new Error('Invalid parameters for take profit calculation');
   }
@@ -69,18 +61,14 @@ function calculateTakeProfit(side, entryPrice, takeProfitPercent, leverage = 1) 
     throw new Error('Take profit percent must be positive');
   }
   
-  // Convert margin profit % to price move % using leverage
-  // Price move % = Margin profit % / Leverage
-  const priceMovePct = takeProfitPercent / leverage;
-  
   let tpPrice;
   
   if (side.toUpperCase() === 'BUY') {
     // Long position: take profit above entry
-    tpPrice = entryPrice * (1 + priceMovePct / 100);
+    tpPrice = entryPrice * (1 + takeProfitPercent / 100);
   } else if (side.toUpperCase() === 'SELL') {
     // Short position: take profit below entry
-    tpPrice = entryPrice * (1 - priceMovePct / 100);
+    tpPrice = entryPrice * (1 - takeProfitPercent / 100);
   } else {
     throw new Error('Invalid side. Must be BUY or SELL');
   }
