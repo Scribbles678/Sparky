@@ -74,6 +74,9 @@ const tradeExecutor = new TradeExecutor(asterApi, positionTracker, config);
 
 const app = express();
 
+// Trust proxy (needed when behind Nginx reverse proxy)
+app.set('trust proxy', true);
+
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
