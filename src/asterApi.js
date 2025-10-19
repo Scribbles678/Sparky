@@ -178,6 +178,14 @@ class AsterAPI {
   // ==================== Order Methods ====================
 
   /**
+   * Set leverage for a symbol
+   */
+  async setLeverage(symbol, leverage) {
+    logger.info(`Setting leverage for ${symbol} to ${leverage}x`);
+    return this.makeRequest('POST', '/fapi/v1/leverage', { symbol, leverage });
+  }
+
+  /**
    * Place an order
    */
   async placeOrder(orderData) {
@@ -189,12 +197,16 @@ class AsterAPI {
    * Place market order
    */
   async placeMarketOrder(symbol, side, quantity, leverage) {
+    // Set leverage first (if provided)
+    if (leverage) {
+      await this.setLeverage(symbol, leverage);
+    }
+    
     const orderData = {
       symbol,
       side: side.toUpperCase(),
       type: 'MARKET',
       quantity: quantity.toString(),
-      leverage,
     };
     
     return this.placeOrder(orderData);
@@ -204,13 +216,17 @@ class AsterAPI {
    * Place limit order
    */
   async placeLimitOrder(symbol, side, quantity, price, leverage) {
+    // Set leverage first (if provided)
+    if (leverage) {
+      await this.setLeverage(symbol, leverage);
+    }
+    
     const orderData = {
       symbol,
       side: side.toUpperCase(),
       type: 'LIMIT',
       quantity: quantity.toString(),
       price: price.toString(),
-      leverage,
       timeInForce: 'GTC', // Good Till Cancel
     };
     
