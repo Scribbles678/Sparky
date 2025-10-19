@@ -46,13 +46,21 @@ class TradeExecutor {
     const {
       action,
       symbol,
-      order_type = 'market',
+      orderType,
+      order_type,
       price,
+      stopLoss,
       stop_loss_percent,
+      takeProfit,
       take_profit_percent,
     } = alertData;
 
     const side = action.toUpperCase();
+    
+    // Support both camelCase and snake_case
+    const finalOrderType = (orderType || order_type || 'market').toLowerCase();
+    const finalStopLoss = stopLoss || stop_loss_percent;
+    const finalTakeProfit = takeProfit || take_profit_percent;
 
     logger.info(`Opening ${side} position for ${symbol}`);
 
@@ -79,8 +87,16 @@ class TradeExecutor {
 
       logger.info(`Margin check passed. Available: ${availableMargin}, Required: ${requiredMargin}`);
 
-      // Step 4: Calculate position size
-      const entryPrice = price;
+      // Step 4: Get current market price if not provided (for MARKET orders)
+      let entryPrice = price;
+      if (!entryPrice || finalOrderType === 'market') {
+        const ticker = await this.api.getTicker(symbol);
+        entryPrice = parseFloat(ticker.lastPrice || ticker.price);
+        logger.info(`Fetched current market price for ${symbol}: ${entryPrice}`);
+      }
+      
+      // Step 4b: Calculate position size
+      
       const quantity = calculatePositionSize(this.config.tradeAmount, leverage, entryPrice);
       const roundedQuantity = roundQuantity(quantity);
 
@@ -89,7 +105,7 @@ class TradeExecutor {
       // Step 5: Place entry order
       let orderResult;
       
-      if (order_type.toLowerCase() === 'market') {
+      if (finalOrderType === 'market') {
         orderResult = await this.api.placeMarketOrder(symbol, side, roundedQuantity, leverage);
       } else {
         orderResult = await this.api.placeLimitOrder(symbol, side, roundedQuantity, entryPrice, leverage);
@@ -106,9 +122,9 @@ class TradeExecutor {
       // Step 6: Place stop loss
       let stopLossOrderId = null;
       
-      if (stop_loss_percent) {
+      if (finalStopLoss) {
         try {
-          const stopPrice = calculateStopLoss(side, entryPrice, stop_loss_percent);
+          const stopPrice = calculateStopLoss(side, entryPrice, finalStopLoss);
           const roundedStopPrice = roundPrice(stopPrice);
           const stopSide = getOppositeSide(side);
 
@@ -123,7 +139,7 @@ class TradeExecutor {
           
           logger.info(`Stop loss placed at ${roundedStopPrice}`, {
             orderId: stopLossOrderId,
-            percent: stop_loss_percent,
+            percent: finalStopLoss,
           });
         } catch (error) {
           logger.logError('Failed to place stop loss', error, { symbol });
@@ -134,9 +150,9 @@ class TradeExecutor {
       // Step 7: Place take profit (optional)
       let takeProfitOrderId = null;
       
-      if (take_profit_percent) {
+      if (finalTakeProfit) {
         try {
-          const tpPrice = calculateTakeProfit(side, entryPrice, take_profit_percent);
+          const tpPrice = calculateTakeProfit(side, entryPrice, finalTakeProfit);
           const roundedTpPrice = roundPrice(tpPrice);
           const tpSide = getOppositeSide(side);
 
@@ -151,7 +167,7 @@ class TradeExecutor {
           
           logger.info(`Take profit placed at ${roundedTpPrice}`, {
             orderId: takeProfitOrderId,
-            percent: take_profit_percent,
+            percent: finalTakeProfit,
           });
         } catch (error) {
           logger.logError('Failed to place take profit', error, { symbol });

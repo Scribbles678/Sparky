@@ -162,6 +162,15 @@ class AsterAPI {
     return position !== null;
   }
 
+  // ==================== Market Data Methods ====================
+
+  /**
+   * Get current ticker price for a symbol
+   */
+  async getTicker(symbol) {
+    return this.makeRequest('GET', '/fapi/v1/ticker/price', { symbol });
+  }
+
   // ==================== Order Methods ====================
 
   /**
