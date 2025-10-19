@@ -88,6 +88,7 @@ const webhookLimiter = rateLimit({
   message: 'Too many webhook requests, please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { trustProxy: false, xForwardedForHeader: false }, // Skip validation warnings for Nginx proxy
 });
 
 // Request logging middleware
