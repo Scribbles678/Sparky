@@ -124,7 +124,7 @@ class TradeExecutor {
       
       if (finalStopLoss) {
         try {
-          const stopPrice = calculateStopLoss(side, entryPrice, finalStopLoss);
+          const stopPrice = calculateStopLoss(side, entryPrice, finalStopLoss, leverage);
           const roundedStopPrice = roundPrice(stopPrice);
           const stopSide = getOppositeSide(side);
 
@@ -140,6 +140,8 @@ class TradeExecutor {
           logger.info(`Stop loss placed at ${roundedStopPrice}`, {
             orderId: stopLossOrderId,
             percent: finalStopLoss,
+            leverage: leverage,
+            priceMovePct: (finalStopLoss / leverage).toFixed(2) + '%',
           });
         } catch (error) {
           logger.logError('Failed to place stop loss', error, { symbol });
@@ -152,7 +154,7 @@ class TradeExecutor {
       
       if (finalTakeProfit) {
         try {
-          const tpPrice = calculateTakeProfit(side, entryPrice, finalTakeProfit);
+          const tpPrice = calculateTakeProfit(side, entryPrice, finalTakeProfit, leverage);
           const roundedTpPrice = roundPrice(tpPrice);
           const tpSide = getOppositeSide(side);
 
@@ -168,6 +170,8 @@ class TradeExecutor {
           logger.info(`Take profit placed at ${roundedTpPrice}`, {
             orderId: takeProfitOrderId,
             percent: finalTakeProfit,
+            leverage: leverage,
+            priceMovePct: (finalTakeProfit / leverage).toFixed(2) + '%',
           });
         } catch (error) {
           logger.logError('Failed to place take profit', error, { symbol });

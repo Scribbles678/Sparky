@@ -17,13 +17,14 @@ function calculatePositionSize(tradeAmount, leverage, price) {
 }
 
 /**
- * Calculate stop loss price
+ * Calculate stop loss price (adjusted for leverage)
  * @param {string} side - 'BUY' or 'SELL'
  * @param {number} entryPrice - Entry price
- * @param {number} stopLossPercent - Stop loss percentage
+ * @param {number} stopLossPercent - Stop loss percentage (% loss on margin, not price)
+ * @param {number} leverage - Leverage multiplier
  * @returns {number} Stop loss price
  */
-function calculateStopLoss(side, entryPrice, stopLossPercent) {
+function calculateStopLoss(side, entryPrice, stopLossPercent, leverage = 1) {
   if (!side || !entryPrice || entryPrice <= 0) {
     throw new Error('Invalid parameters for stop loss calculation');
   }
@@ -32,14 +33,18 @@ function calculateStopLoss(side, entryPrice, stopLossPercent) {
     throw new Error('Stop loss percent must be positive');
   }
   
+  // Convert margin loss % to price move % using leverage
+  // Price move % = Margin loss % / Leverage
+  const priceMovePct = stopLossPercent / leverage;
+  
   let stopPrice;
   
   if (side.toUpperCase() === 'BUY') {
     // Long position: stop loss below entry
-    stopPrice = entryPrice * (1 - stopLossPercent / 100);
+    stopPrice = entryPrice * (1 - priceMovePct / 100);
   } else if (side.toUpperCase() === 'SELL') {
     // Short position: stop loss above entry
-    stopPrice = entryPrice * (1 + stopLossPercent / 100);
+    stopPrice = entryPrice * (1 + priceMovePct / 100);
   } else {
     throw new Error('Invalid side. Must be BUY or SELL');
   }
@@ -48,13 +53,14 @@ function calculateStopLoss(side, entryPrice, stopLossPercent) {
 }
 
 /**
- * Calculate take profit price
+ * Calculate take profit price (adjusted for leverage)
  * @param {string} side - 'BUY' or 'SELL'
  * @param {number} entryPrice - Entry price
- * @param {number} takeProfitPercent - Take profit percentage
+ * @param {number} takeProfitPercent - Take profit percentage (% profit on margin, not price)
+ * @param {number} leverage - Leverage multiplier
  * @returns {number} Take profit price
  */
-function calculateTakeProfit(side, entryPrice, takeProfitPercent) {
+function calculateTakeProfit(side, entryPrice, takeProfitPercent, leverage = 1) {
   if (!side || !entryPrice || entryPrice <= 0) {
     throw new Error('Invalid parameters for take profit calculation');
   }
@@ -63,14 +69,18 @@ function calculateTakeProfit(side, entryPrice, takeProfitPercent) {
     throw new Error('Take profit percent must be positive');
   }
   
+  // Convert margin profit % to price move % using leverage
+  // Price move % = Margin profit % / Leverage
+  const priceMovePct = takeProfitPercent / leverage;
+  
   let tpPrice;
   
   if (side.toUpperCase() === 'BUY') {
     // Long position: take profit above entry
-    tpPrice = entryPrice * (1 + takeProfitPercent / 100);
+    tpPrice = entryPrice * (1 + priceMovePct / 100);
   } else if (side.toUpperCase() === 'SELL') {
     // Short position: take profit below entry
-    tpPrice = entryPrice * (1 - takeProfitPercent / 100);
+    tpPrice = entryPrice * (1 - priceMovePct / 100);
   } else {
     throw new Error('Invalid side. Must be BUY or SELL');
   }
