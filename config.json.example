@@ -8,7 +8,7 @@
   },
   "webhookSecret": "your-secret-token",
   "aster": {
-    "apiUrl": "https://api.aster.finance",
+    "apiUrl": "https://fapi.asterdex.com",
     "apiKey": "YOUR_API_KEY",
     "apiSecret": "YOUR_API_SECRET"
   },

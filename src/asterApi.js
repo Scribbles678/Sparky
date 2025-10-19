@@ -36,9 +36,9 @@ class AsterAPI {
     const signature = this.generateSignature(timestamp, method, path, body);
     
     const headers = {
-      'X-ASTER-APIKEY': this.apiKey,
-      'X-ASTER-SIGNATURE': signature,
-      'X-ASTER-TIMESTAMP': timestamp,
+      'X-MBX-APIKEY': this.apiKey,
+      'X-MBX-SIGNATURE': signature,
+      'X-MBX-TIMESTAMP': timestamp,
       'Content-Type': 'application/json',
     };
 
@@ -109,7 +109,7 @@ class AsterAPI {
    * Get account balance
    */
   async getBalance() {
-    return this.makeRequest('GET', '/fapi/v1/balance');
+    return this.makeRequest('GET', '/fapi/v2/balance');
   }
 
   /**
@@ -132,7 +132,7 @@ class AsterAPI {
    * Get all open positions
    */
   async getPositions() {
-    return this.makeRequest('GET', '/fapi/v1/positionRisk');
+    return this.makeRequest('GET', '/fapi/v2/positionRisk');
   }
 
   /**
