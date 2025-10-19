@@ -106,10 +106,10 @@ function roundPrice(price, decimals = 2) {
 /**
  * Round quantity to appropriate decimal places
  * @param {number} quantity - Quantity to round
- * @param {number} decimals - Number of decimal places (default: 6)
+ * @param {number} decimals - Number of decimal places (default: 3)
  * @returns {number} Rounded quantity
  */
-function roundQuantity(quantity, decimals = 6) {
+function roundQuantity(quantity, decimals = 3) {
   return Math.round(quantity * Math.pow(10, decimals)) / Math.pow(10, decimals);
 }
 
