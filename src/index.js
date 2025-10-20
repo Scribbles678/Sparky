@@ -404,8 +404,9 @@ const server = app.listen(PORT, async () => {
 
   // Test database connection
   const { testConnection } = require('./supabaseClient');
+  let dbConnected = false;
   try {
-    const dbConnected = await testConnection();
+    dbConnected = await testConnection();
     if (dbConnected) {
       logger.info('✅ Database connection successful');
     } else {
