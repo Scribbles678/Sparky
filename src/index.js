@@ -7,6 +7,7 @@ const logger = require('./utils/logger');
 const AsterAPI = require('./asterApi');
 const PositionTracker = require('./positionTracker');
 const TradeExecutor = require('./tradeExecutor');
+const PositionUpdater = require('./positionUpdater');
 
 // ==================== Configuration ====================
 
@@ -62,6 +63,7 @@ const asterApi = new AsterAPI(
 
 const positionTracker = new PositionTracker();
 const tradeExecutor = new TradeExecutor(asterApi, positionTracker, config);
+const positionUpdater = new PositionUpdater(asterApi, positionTracker, config);
 
 // ==================== Express App Setup ====================
 
@@ -73,6 +75,32 @@ app.set('trust proxy', true);
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// CORS middleware for dashboard access
+app.use((req, res, next) => {
+  // Allow requests from dashboard (adjust port if needed)
+  const allowedOrigins = [
+    'http://localhost:3001',
+    'http://127.0.0.1:3001',
+    process.env.DASHBOARD_URL,
+  ].filter(Boolean);
+  
+  const origin = req.headers.origin;
+  if (allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
+  
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  
+  // Handle preflight
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  
+  next();
+});
 
 // Rate limiting for webhook endpoint
 const webhookLimiter = rateLimit({
@@ -152,6 +180,39 @@ app.get('/positions', (req, res) => {
 });
 
 /**
+ * Test webhook endpoint - accepts any data and shows what was received
+ * Useful for debugging TradingView webhook configuration
+ */
+app.post('/webhook/test', (req, res) => {
+  const receivedData = {
+    headers: {
+      'content-type': req.get('content-type'),
+      'user-agent': req.get('user-agent'),
+    },
+    body: req.body,
+    bodyIsEmpty: Object.keys(req.body).length === 0,
+    bodyKeys: Object.keys(req.body),
+    rawBody: JSON.stringify(req.body, null, 2),
+  };
+
+  logger.info('Test webhook received', receivedData);
+
+  res.json({
+    success: true,
+    message: 'Test webhook received successfully',
+    received: receivedData,
+    expectedFormat: {
+      secret: 'your-webhook-secret',
+      action: 'buy or sell or close',
+      symbol: 'BTCUSDT',
+      orderType: 'market (optional, defaults to market)',
+      stop_loss_percent: 2,
+      take_profit_percent: 4,
+    },
+  });
+});
+
+/**
  * Sync positions with exchange
  */
 app.post('/positions/sync', async (req, res) => {
@@ -184,18 +245,43 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
     logger.info('Webhook received', {
       body: JSON.stringify(alertData),
       contentType: req.get('content-type'),
+      bodySize: JSON.stringify(alertData).length,
+      isEmpty: Object.keys(alertData).length === 0,
     });
+
+    // Check if body is empty
+    if (!alertData || Object.keys(alertData).length === 0) {
+      logger.error('Webhook received with empty body', {
+        ip: req.ip,
+        contentType: req.get('content-type'),
+      });
+      return res.status(400).json({
+        success: false,
+        error: 'Empty webhook body. Check your TradingView alert message configuration.',
+        hint: 'Alert message should be valid JSON like: {"secret":"YOUR_SECRET","action":"buy","symbol":"BTCUSDT"}',
+      });
+    }
 
     // Validate webhook secret
     if (!alertData.secret || alertData.secret !== WEBHOOK_SECRET) {
       logger.warn('Unauthorized webhook attempt', {
         ip: req.ip,
         secret: alertData.secret ? '[PROVIDED]' : '[MISSING]',
+        hasBody: Object.keys(alertData).length > 0,
       });
       return res.status(401).json({
         success: false,
         error: 'Unauthorized: Invalid webhook secret',
+        hint: alertData.secret ? 'Secret provided but incorrect' : 'Secret missing from webhook body',
       });
+    }
+
+    // Clean up symbol (remove exchange prefix if present)
+    // TradingView might send "BINANCE:BTCUSDT" or "BYBIT:ETHUSDT"
+    if (alertData.symbol && alertData.symbol.includes(':')) {
+      const parts = alertData.symbol.split(':');
+      alertData.symbol = parts[parts.length - 1]; // Take the last part
+      logger.info(`Symbol contained exchange prefix, cleaned to: ${alertData.symbol}`);
     }
 
     // Validate required fields
@@ -213,12 +299,22 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
       });
     }
 
+    // Normalize action (TradingView might send "long"/"short" or "buy"/"sell")
+    const normalizedAction = alertData.action.toLowerCase();
+    if (normalizedAction === 'long') {
+      alertData.action = 'buy';
+      logger.info('Normalized action from "long" to "buy"');
+    } else if (normalizedAction === 'short') {
+      alertData.action = 'sell';
+      logger.info('Normalized action from "short" to "sell"');
+    }
+
     // Validate action type
     const validActions = ['buy', 'sell', 'close'];
     if (!validActions.includes(alertData.action.toLowerCase())) {
       return res.status(400).json({
         success: false,
-        error: `Invalid action. Must be one of: ${validActions.join(', ')}`,
+        error: `Invalid action. Must be one of: buy, sell, close (or long, short)`,
       });
     }
 
@@ -306,6 +402,20 @@ const server = app.listen(PORT, async () => {
     logger.error('Please check your API credentials');
   }
 
+  // Test database connection
+  const { testConnection } = require('./supabaseClient');
+  try {
+    const dbConnected = await testConnection();
+    if (dbConnected) {
+      logger.info('✅ Database connection successful');
+    } else {
+      logger.warn('⚠️  Database not configured. Trades will not be logged to Supabase.');
+      logger.warn('Add SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to .env to enable database logging.');
+    }
+  } catch (error) {
+    logger.warn('⚠️  Database connection failed', error.message);
+  }
+
   // Sync positions on startup
   try {
     await positionTracker.syncWithExchange(asterApi);
@@ -313,12 +423,23 @@ const server = app.listen(PORT, async () => {
   } catch (error) {
     logger.warn('⚠️  Failed to sync positions on startup', error.message);
   }
+
+  // Start position price updater service
+  if (dbConnected) {
+    positionUpdater.start();
+    logger.info('✅ Position price updater started (updates every 30s)');
+  } else {
+    logger.info('ℹ️  Position price updater skipped (database not configured)');
+  }
 });
 
 // ==================== Graceful Shutdown ====================
 
 const shutdown = async () => {
   logger.info('Shutting down gracefully...');
+  
+  // Stop position updater
+  positionUpdater.stop();
   
   server.close(() => {
     logger.info('HTTP server closed');

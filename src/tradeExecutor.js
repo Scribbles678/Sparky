@@ -7,6 +7,11 @@ const {
   roundPrice,
   roundQuantity,
 } = require('./utils/calculations');
+const {
+  logTrade,
+  savePosition,
+  removePosition,
+} = require('./supabaseClient');
 
 class TradeExecutor {
   constructor(asterApi, positionTracker, config) {
@@ -184,6 +189,29 @@ class TradeExecutor {
         takeProfitPercent: finalTakeProfit,
       });
 
+      // Step 9: Log position to database
+      const stopPrice = finalStopLoss ? calculateStopLoss(side, entryPrice, finalStopLoss) : null;
+      const tpPrice = finalTakeProfit ? calculateTakeProfit(side, entryPrice, finalTakeProfit) : null;
+      
+      await savePosition({
+        symbol,
+        side,
+        entryPrice,
+        entryTime: new Date().toISOString(),
+        quantity: roundedQuantity,
+        positionSizeUsd: this.config.tradeAmount,
+        stopLossPrice: stopPrice,
+        takeProfitPrice: tpPrice,
+        stopLossPercent: finalStopLoss,
+        takeProfitPercent: finalTakeProfit,
+        entryOrderId: orderResult.orderId,
+        stopLossOrderId,
+        takeProfitOrderId,
+        currentPrice: entryPrice,
+        unrealizedPnlUsd: 0,
+        unrealizedPnlPercent: 0,
+      });
+
       logger.info(`Position opened successfully for ${symbol}`);
 
       return {
@@ -229,6 +257,24 @@ class TradeExecutor {
       const positionAmt = parseFloat(exchangePosition.positionAmt);
       const quantity = Math.abs(positionAmt);
       const side = positionAmt > 0 ? 'SELL' : 'BUY'; // Opposite side to close
+      
+      // Get entry price and calculate exit price
+      const entryPrice = parseFloat(exchangePosition.entryPrice);
+      const exitPrice = parseFloat(exchangePosition.markPrice || exchangePosition.lastPrice || 0);
+      
+      // Calculate P&L
+      const positionSide = positionAmt > 0 ? 'BUY' : 'SELL';
+      let pnlUsd = 0;
+      
+      if (positionSide === 'BUY') {
+        // Long position: profit if price went up
+        pnlUsd = (exitPrice - entryPrice) * quantity;
+      } else {
+        // Short position: profit if price went down
+        pnlUsd = (entryPrice - exitPrice) * quantity;
+      }
+      
+      const pnlPercent = (pnlUsd / this.config.tradeAmount) * 100;
 
       // Close the position
       const closeResult = await this.api.closePosition(symbol, side, quantity);
@@ -237,6 +283,7 @@ class TradeExecutor {
         orderId: closeResult.orderId,
         quantity,
         side,
+        pnl: `$${pnlUsd.toFixed(2)} (${pnlPercent.toFixed(2)}%)`,
       });
 
       // Cancel stop loss and take profit orders if they exist
@@ -260,15 +307,44 @@ class TradeExecutor {
         }
       }
 
+      // Log completed trade to database
+      if (trackedPosition) {
+        await logTrade({
+          symbol,
+          side: positionSide,
+          entryPrice: trackedPosition.entryPrice || entryPrice,
+          entryTime: trackedPosition.timestamp || new Date().toISOString(),
+          exitPrice,
+          exitTime: new Date().toISOString(),
+          quantity,
+          positionSizeUsd: this.config.tradeAmount,
+          stopLossPrice: trackedPosition.stopLossPercent ? calculateStopLoss(positionSide, entryPrice, trackedPosition.stopLossPercent) : null,
+          takeProfitPrice: trackedPosition.takeProfitPercent ? calculateTakeProfit(positionSide, entryPrice, trackedPosition.takeProfitPercent) : null,
+          stopLossPercent: trackedPosition.stopLossPercent,
+          takeProfitPercent: trackedPosition.takeProfitPercent,
+          pnlUsd,
+          pnlPercent,
+          orderId: closeResult.orderId,
+          exitReason: 'MANUAL', // You can enhance this later to detect SL/TP hits
+        });
+      }
+
+      // Remove position from database
+      await removePosition(symbol);
+      
       // Remove from tracker
       this.tracker.removePosition(symbol);
 
-      logger.info(`Position closed successfully for ${symbol}`);
+      logger.info(`Position closed successfully for ${symbol} with P&L: $${pnlUsd.toFixed(2)}`);
 
       return {
         success: true,
         action: 'closed',
         closeOrder: closeResult,
+        pnl: {
+          usd: pnlUsd,
+          percent: pnlPercent,
+        },
       };
     } catch (error) {
       logger.logError('Failed to close position', error, { symbol });
