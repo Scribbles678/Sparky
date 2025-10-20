@@ -2,18 +2,43 @@
 
 A headless trading bot that receives TradingView webhook alerts and executes trades on Aster DEX futures with simple percentage-based stop loss and take profit.
 
+**Part of the Sparky Trading Ecosystem:**
+- **Sparky Bot** (this repo) - Executes trades on Aster DEX
+- **TradeFI Dashboard** - Real-time analytics and monitoring (separate repo)
+
+## System Architecture
+
+```
+TradingView Alerts → Sparky Bot → Aster DEX (Trades)
+                          ↓
+                    Supabase Database
+                          ↑
+                  TradeFI Dashboard (Analytics)
+```
+
 ## Features
 
+### Trading Bot (Sparky)
 - 🔔 Receives TradingView webhook alerts via HTTP
 - 📊 Executes market/limit orders on Aster DEX
 - 🛡️ **Simple percentage-based stop loss and take profit** (% of position value)
 - 📈 Position management (1 position per symbol, closes existing before opening new)
 - 💰 Fixed position sizing ($100 per trade by default)
 - 🔐 HMAC-SHA256 authentication for Aster API
+- 🗄️ **Supabase integration** - Logs all trades and positions
+- ⚡ **Real-time position updates** - Updates prices every 30 seconds
 - 📝 Comprehensive logging with Winston
 - 🔄 Auto-restart with PM2
 - 🌐 Nginx reverse proxy support for webhooks
 - 🔒 Rate limiting on webhook endpoint
+
+### Dashboard Integration (TradeFI)
+- 📊 Real-time P&L tracking
+- 📈 Win rate analytics
+- 📉 Cumulative P&L charts
+- 🔴 Live position monitoring
+- 📜 Trade history
+- ⏱️ Auto-refresh every 30 seconds
 
 ## Prerequisites
 
@@ -80,6 +105,195 @@ Edit `config.json`:
 - `riskManagement.maxPositions`: Maximum number of concurrent positions
 
 **Note:** Set your desired leverage (e.g., 25x) directly on the Aster DEX exchange. The bot will use whatever leverage is configured there.
+
+### 4. Configure Supabase Integration (Optional but Recommended)
+
+Add these to your `.env` file for database logging and dashboard integration:
+
+```env
+# Supabase Database (for trade logging & TradeFI dashboard)
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key_here
+```
+
+**Why Supabase?**
+- Logs all trades with entry/exit prices and P&L
+- Tracks open positions in real-time
+- Powers the TradeFI analytics dashboard
+- Enables performance tracking and analysis
+
+**Get Supabase Credentials:**
+1. Go to https://app.supabase.com
+2. Create a new project or use existing
+3. Go to Settings → API
+4. Copy `URL` and `service_role` key (NOT anon key)
+5. Run the `supabase-schema.sql` to create tables
+
+**Without Supabase:**
+- Bot still works and executes trades
+- No trade history logging
+- No dashboard integration
+- Trades only logged to Winston files
+
+## Integration with TradeFI Dashboard
+
+### Overview
+The **TradeFI Dashboard** is a separate Nuxt 3 application that provides real-time analytics for Sparky bot trades.
+
+**Repository:** `c:\Users\mjjoh\TradeFI\tradefi\`
+
+### How They Work Together
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     Sparky Trading Bot (VPS)                    │
+│                                                                 │
+│  1. Receives TradingView webhook                                │
+│  2. Executes trade on Aster DEX                                 │
+│  3. Saves position to Supabase (positions table)                │
+│  4. Updates prices every 30s (positionUpdater.js)               │
+│  5. On close: logs to Supabase (trades table)                   │
+└─────────────────────────────────────────────────────────────────┘
+                            ↓ writes to
+┌─────────────────────────────────────────────────────────────────┐
+│                    Supabase Database (Cloud)                    │
+│                                                                 │
+│  Tables:                                                        │
+│  - positions (open positions, updated every 30s)                │
+│  - trades (completed trades with P&L)                           │
+│  - trade_stats (aggregate statistics view)                      │
+└─────────────────────────────────────────────────────────────────┘
+                            ↑ reads from
+┌─────────────────────────────────────────────────────────────────┐
+│                TradeFI Dashboard (Local/Deployed)                │
+│                                                                 │
+│  1. Reads from Supabase (read-only, anon key)                   │
+│  2. Displays real-time positions & P&L                          │
+│  3. Shows cumulative P&L charts                                 │
+│  4. Auto-refreshes every 30 seconds                             │
+│  5. Tracks win rate, trades today, etc.                         │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Key Files for Integration
+
+**Sparky Bot:**
+- `src/supabaseClient.js` - Database connection & logging functions
+- `src/positionUpdater.js` - Updates position prices every 30s
+- `src/tradeExecutor.js` - Calls savePosition() and logTrade()
+- `src/index.js` - Initializes position updater on startup
+
+**TradeFI Dashboard:**
+- `app/utils/supabase.ts` - Read-only database client
+- `app/pages/index.vue` - Main dashboard (Phase 1 MVP)
+- `server/api/sparky/` - Optional: Direct bot API queries
+- `nuxt.config.ts` - Supabase config
+
+### Data Flow Example
+
+**When Opening a Position:**
+```javascript
+// 1. TradingView sends webhook
+POST /webhook {
+  "action": "buy",
+  "symbol": "BTCUSDT",
+  "stop_loss_percent": 1.5,
+  "take_profit_percent": 4.0
+}
+
+// 2. Bot executes trade (tradeExecutor.js)
+await this.api.placeMarketOrder(symbol, side, quantity)
+
+// 3. Bot saves to Supabase (supabaseClient.js)
+await savePosition({
+  symbol: "BTCUSDT",
+  side: "BUY",
+  entry_price: 95000,
+  quantity: 0.00105,
+  position_size_usd: 100,
+  stop_loss_price: 93575,
+  take_profit_price: 98800,
+  // ...
+})
+
+// 4. Dashboard reads within 30s (supabase.ts)
+const positions = await getOpenPositions()
+// Shows: BTCUSDT, $100, Unrealized P&L: $0
+```
+
+**Every 30 Seconds:**
+```javascript
+// positionUpdater.js automatically:
+const currentPrice = await this.api.getTicker(symbol)
+const unrealizedPnL = calculatePnL(position, currentPrice)
+
+await updatePositionPnL(symbol, currentPrice, unrealizedPnL)
+// Dashboard auto-refreshes and shows updated P&L
+```
+
+**When Closing:**
+```javascript
+// 1. Position hits TP/SL or manual close
+await this.api.closePosition(symbol, side, quantity)
+
+// 2. Bot logs final trade
+await logTrade({
+  symbol: "BTCUSDT",
+  entry_price: 95000,
+  exit_price: 98800,
+  pnl_usd: 4.00,
+  pnl_percent: 4.0,
+  is_winner: true,
+  exit_reason: "TAKE_PROFIT"
+})
+
+// 3. Bot removes from positions
+await removePosition(symbol)
+
+// 4. Dashboard shows in "Recent Trades"
+// Stats update: today's P&L, win rate, etc.
+```
+
+### Database Schema
+
+**positions table** (open positions):
+- `symbol` (unique) - Trading pair
+- `side` - BUY or SELL
+- `entry_price` - Entry price
+- `current_price` - Latest price (updated every 30s)
+- `unrealized_pnl_usd` - Current profit/loss
+- `stop_loss_price`, `take_profit_price`
+- `last_price_update` - Last update timestamp
+
+**trades table** (completed trades):
+- `symbol` - Trading pair
+- `entry_price`, `exit_price`
+- `entry_time`, `exit_time`
+- `pnl_usd`, `pnl_percent`
+- `is_winner` - Boolean
+- `exit_reason` - STOP_LOSS, TAKE_PROFIT, or MANUAL
+
+### Setup TradeFI Dashboard
+
+See `SUPABASE_INTEGRATION.md` for complete setup guide.
+
+**Quick Start:**
+```bash
+# Navigate to dashboard
+cd c:\Users\mjjoh\TradeFI\tradefi
+
+# Install dependencies
+npm install
+
+# Add .env file with Supabase credentials
+# SUPABASE_URL=...
+# SUPABASE_ANON_KEY=... (use anon key, NOT service role)
+
+# Run dashboard
+npm run dev
+
+# Open http://localhost:3001
+```
 
 ## Usage
 
