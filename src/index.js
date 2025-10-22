@@ -393,6 +393,9 @@ const server = app.listen(PORT, async () => {
   logger.info(`API URL: ${config.aster.apiUrl}`);
   logger.info(`Position size: $${config.tradeAmount} per trade`);
   
+  // Initialize dbConnected at function scope
+  let dbConnected = false;
+  
   // Test API connection
   try {
     const balance = await asterApi.getAvailableMargin();
@@ -403,9 +406,8 @@ const server = app.listen(PORT, async () => {
   }
 
   // Test database connection
-  const { testConnection } = require('./supabaseClient');
-  let dbConnected = false;
   try {
+    const { testConnection } = require('./supabaseClient');
     dbConnected = await testConnection();
     if (dbConnected) {
       logger.info('✅ Database connection successful');
@@ -415,6 +417,7 @@ const server = app.listen(PORT, async () => {
     }
   } catch (error) {
     logger.warn('⚠️  Database connection failed', error.message);
+    dbConnected = false;
   }
 
   // Sync positions on startup
