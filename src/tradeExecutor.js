@@ -69,14 +69,35 @@ class TradeExecutor {
     logger.info(`Opening ${side} position for ${symbol}`);
 
     try {
-      // Step 1: Check if position already exists - if yes, skip this alert
+      // Step 1: Check if position already exists
       if (this.tracker.hasPosition(symbol)) {
-        logger.info(`Position already exists for ${symbol}, ignoring alert`);
-        return {
-          success: false,
-          action: 'skipped',
-          message: `Position already open for ${symbol}. Close it first or wait for TP/SL.`,
-        };
+        const existingPosition = this.tracker.getPosition(symbol);
+        
+        // If same side, ignore the alert
+        if (existingPosition.side === side) {
+          logger.info(`Already have ${side} position for ${symbol}, ignoring duplicate signal`);
+          return {
+            success: false,
+            action: 'skipped',
+            message: `Already have ${side} position for ${symbol}. Waiting for TP/SL or opposite signal.`,
+          };
+        }
+        
+        // If opposite side, close existing position first (reversal)
+        logger.info(`Reversal signal detected: Closing ${existingPosition.side} position before opening ${side} position for ${symbol}`);
+        try {
+          await this.closePosition(symbol);
+          logger.info(`Previous position closed successfully. Opening new ${side} position...`);
+          // Wait 1 second for exchange to process
+          await this.sleep(1000);
+        } catch (error) {
+          logger.logError(`Failed to close existing position for reversal`, error, { symbol });
+          return {
+            success: false,
+            action: 'reversal_failed',
+            message: `Failed to close existing position for reversal: ${error.message}`,
+          };
+        }
       }
 
       // Step 2: Check available margin (optional, for safety)

@@ -1,10 +1,11 @@
 /**
  * Position Price Updater Service
  * Periodically fetches current prices and updates Supabase positions
+ * Also syncs with exchange to detect closed positions
  */
 
 const logger = require('./utils/logger');
-const { updatePositionPnL } = require('./supabaseClient');
+const { updatePositionPnL, logTrade, removePosition } = require('./supabaseClient');
 const { calculatePositionSize } = require('./utils/calculations');
 
 class PositionUpdater {
@@ -14,6 +15,8 @@ class PositionUpdater {
     this.config = config;
     this.updateInterval = null;
     this.intervalMs = 30000; // Update every 30 seconds
+    this.syncIntervalCount = 10; // Sync with exchange every 10 intervals (5 minutes)
+    this.currentIntervalCount = 0;
   }
 
   /**
@@ -52,6 +55,15 @@ class PositionUpdater {
    */
   async updateAllPositions() {
     try {
+      // Increment interval counter
+      this.currentIntervalCount++;
+      
+      // Sync with exchange every N intervals (5 minutes)
+      if (this.currentIntervalCount >= this.syncIntervalCount) {
+        this.currentIntervalCount = 0;
+        await this.syncWithExchange();
+      }
+      
       const positions = this.tracker.getAllPositions();
       
       if (positions.length === 0) {
@@ -128,6 +140,129 @@ class PositionUpdater {
       unrealizedPnlUsd: parseFloat(unrealizedPnlUsd.toFixed(4)),
       unrealizedPnlPercent: parseFloat(unrealizedPnlPercent.toFixed(4)),
     };
+  }
+
+  /**
+   * Sync tracked positions with exchange to detect closed positions
+   */
+  async syncWithExchange() {
+    try {
+      logger.info('Auto-syncing positions with exchange...');
+      
+      // Get all tracked positions
+      const trackedPositions = this.tracker.getAllPositions();
+      
+      if (trackedPositions.length === 0) {
+        return; // Nothing to sync
+      }
+      
+      // Get actual positions from exchange
+      const exchangePositions = await this.api.getPositions();
+      const openSymbols = exchangePositions
+        .filter(p => parseFloat(p.positionAmt) !== 0)
+        .map(p => p.symbol);
+      
+      // Find positions that are tracked but no longer open on exchange
+      const closedPositions = trackedPositions.filter(
+        tracked => !openSymbols.includes(tracked.symbol)
+      );
+      
+      if (closedPositions.length === 0) {
+        logger.info('All tracked positions still open on exchange');
+        return;
+      }
+      
+      logger.info(`Detected ${closedPositions.length} position(s) closed on exchange`);
+      
+      // Process each closed position
+      for (const position of closedPositions) {
+        await this.handleClosedPosition(position);
+      }
+    } catch (error) {
+      logger.logError('Error in syncWithExchange', error);
+    }
+  }
+  
+  /**
+   * Handle a position that was closed on the exchange
+   */
+  async handleClosedPosition(position) {
+    try {
+      logger.info(`Position ${position.symbol} was closed on exchange (likely TP/SL hit)`);
+      
+      // Get final price from ticker
+      const ticker = await this.api.getTicker(position.symbol);
+      const exitPrice = parseFloat(ticker.lastPrice || ticker.price);
+      
+      // Calculate final P&L
+      const { unrealizedPnlUsd, unrealizedPnlPercent } = this.calculateUnrealizedPnL(
+        position,
+        exitPrice
+      );
+      
+      // Determine exit reason (check if close to TP or SL)
+      let exitReason = 'AUTO_CLOSED';
+      
+      if (position.stopLossPercent) {
+        const slPrice = position.side === 'BUY' 
+          ? position.entryPrice * (1 - position.stopLossPercent / 100)
+          : position.entryPrice * (1 + position.stopLossPercent / 100);
+        
+        const slDiff = Math.abs(exitPrice - slPrice) / slPrice;
+        if (slDiff < 0.01) { // Within 1% of SL price
+          exitReason = 'STOP_LOSS';
+        }
+      }
+      
+      if (position.takeProfitPercent && exitReason === 'AUTO_CLOSED') {
+        const tpPrice = position.side === 'BUY'
+          ? position.entryPrice * (1 + position.takeProfitPercent / 100)
+          : position.entryPrice * (1 - position.takeProfitPercent / 100);
+        
+        const tpDiff = Math.abs(exitPrice - tpPrice) / tpPrice;
+        if (tpDiff < 0.01) { // Within 1% of TP price
+          exitReason = 'TAKE_PROFIT';
+        }
+      }
+      
+      // Log to database
+      await logTrade({
+        symbol: position.symbol,
+        side: position.side,
+        entryPrice: position.entryPrice,
+        entryTime: new Date(position.timestamp).toISOString(),
+        exitPrice,
+        exitTime: new Date().toISOString(),
+        quantity: position.quantity,
+        positionSizeUsd: this.config.tradeAmount,
+        stopLossPrice: position.stopLossPercent 
+          ? (position.side === 'BUY' 
+              ? position.entryPrice * (1 - position.stopLossPercent / 100)
+              : position.entryPrice * (1 + position.stopLossPercent / 100))
+          : null,
+        takeProfitPrice: position.takeProfitPercent
+          ? (position.side === 'BUY'
+              ? position.entryPrice * (1 + position.takeProfitPercent / 100)
+              : position.entryPrice * (1 - position.takeProfitPercent / 100))
+          : null,
+        stopLossPercent: position.stopLossPercent,
+        takeProfitPercent: position.takeProfitPercent,
+        pnlUsd: unrealizedPnlUsd,
+        pnlPercent: unrealizedPnlPercent,
+        exitReason,
+        orderId: position.orderId,
+      });
+      
+      // Remove from database positions table
+      await removePosition(position.symbol);
+      
+      // Remove from tracker
+      this.tracker.removePosition(position.symbol);
+      
+      logger.info(`✅ ${position.symbol} closed: ${exitReason}, P&L: $${unrealizedPnlUsd.toFixed(2)} (${unrealizedPnlPercent.toFixed(2)}%)`);
+    } catch (error) {
+      logger.logError(`Error handling closed position ${position.symbol}`, error);
+    }
   }
 
   /**

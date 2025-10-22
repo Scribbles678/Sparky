@@ -432,6 +432,7 @@ const server = app.listen(PORT, async () => {
   if (dbConnected) {
     positionUpdater.start();
     logger.info('✅ Position price updater started (updates every 30s)');
+    logger.info('✅ Auto-sync enabled (syncs with exchange every 5 minutes)');
   } else {
     logger.info('ℹ️  Position price updater skipped (database not configured)');
   }
