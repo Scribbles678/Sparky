@@ -102,12 +102,47 @@ function roundPrice(price, decimals = 2) {
 }
 
 /**
- * Round quantity to appropriate decimal places
+ * Round quantity to appropriate decimal places based on symbol
  * @param {number} quantity - Quantity to round
- * @param {number} decimals - Number of decimal places (default: 3)
+ * @param {string} symbol - Trading symbol (optional, for symbol-specific precision)
  * @returns {number} Rounded quantity
  */
-function roundQuantity(quantity, decimals = 3) {
+function roundQuantity(quantity, symbol = null) {
+  // Symbol-specific precision mapping (based on Aster DEX requirements)
+  const precisionMap = {
+    'BTCUSDT': 3,   // 0.001
+    'ETHUSDT': 2,   // 0.01
+    'SOLUSDT': 1,   // 0.1
+    'BNBUSDT': 2,   // 0.01
+    'ADAUSDT': 0,   // 1
+    'DOGEUSDT': 0,  // 1
+    'XRPUSDT': 0,   // 1
+    'DOTUSDT': 1,   // 0.1
+    'MATICUSDT': 0, // 1
+    'LINKUSDT': 1,  // 0.1
+    'AVAXUSDT': 1,  // 0.1
+    'UNIUSDT': 1,   // 0.1
+    'ATOMUSDT': 1,  // 0.1
+    'LTCUSDT': 2,   // 0.01
+    'NEARUSDT': 1,  // 0.1
+    'APTUSDT': 1,   // 0.1
+    'OPUSDT': 0,    // 1
+    'ARBUSDT': 0,   // 1
+  };
+  
+  // Try to get symbol-specific precision
+  let decimals = 2; // Default fallback
+  
+  if (symbol && precisionMap[symbol.toUpperCase()]) {
+    decimals = precisionMap[symbol.toUpperCase()];
+  } else if (symbol) {
+    // If symbol not in map, try to infer from price magnitude
+    // High-value coins (>$1000) usually need more decimals
+    // Low-value coins (<$10) usually need fewer decimals
+    // This is a fallback heuristic
+    decimals = 1; // Conservative default
+  }
+  
   return Math.round(quantity * Math.pow(10, decimals)) / Math.pow(10, decimals);
 }
 
