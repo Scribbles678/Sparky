@@ -226,11 +226,16 @@ class PositionUpdater {
       }
       
       // Log to database
+      // Ensure timestamp is valid - use current time if missing
+      const entryTime = position.timestamp 
+        ? new Date(position.timestamp).toISOString() 
+        : new Date().toISOString();
+      
       await logTrade({
         symbol: position.symbol,
         side: position.side,
         entryPrice: position.entryPrice,
-        entryTime: new Date(position.timestamp).toISOString(),
+        entryTime,
         exitPrice,
         exitTime: new Date().toISOString(),
         quantity: position.quantity,
