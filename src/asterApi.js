@@ -7,6 +7,7 @@ class AsterAPI {
     this.apiKey = apiKey;
     this.apiSecret = apiSecret;
     this.apiUrl = apiUrl;
+    this.exchangeName = 'aster';
     this.maxRetries = 3;
     this.retryDelay = 1000; // 1 second
   }

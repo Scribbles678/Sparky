@@ -1,11 +1,25 @@
 {
   "tradeAmount": 100,
   "webhookSecret": "your-secret-token",
+  
   "aster": {
     "apiUrl": "https://fapi.asterdex.com",
-    "apiKey": "YOUR_API_KEY",
-    "apiSecret": "YOUR_API_SECRET"
+    "apiKey": "YOUR_ASTER_API_KEY",
+    "apiSecret": "YOUR_ASTER_API_SECRET"
   },
+  
+  "oanda": {
+    "accountId": "YOUR_OANDA_ACCOUNT_ID",
+    "accessToken": "YOUR_OANDA_ACCESS_TOKEN",
+    "environment": "practice"
+  },
+  
+  "tradier": {
+    "accountId": "YOUR_TRADIER_ACCOUNT_ID",
+    "accessToken": "YOUR_TRADIER_ACCESS_TOKEN",
+    "environment": "sandbox"
+  },
+  
   "riskManagement": {
     "maxPositions": 10
   }

@@ -11,10 +11,15 @@ class PositionTracker {
 
   /**
    * Add or update a position
+   * Now supports exchange parameter for multi-exchange tracking
    */
-  addPosition(symbol, positionData) {
+  addPosition(symbol, positionData, exchange = 'aster') {
+    // Create composite key: exchange:symbol (e.g., "aster:BTCUSDT", "oanda:EUR_USD")
+    const key = `${exchange.toLowerCase()}:${symbol}`;
+    
     const position = {
       symbol,
+      exchange: exchange.toLowerCase(),
       side: positionData.side,
       quantity: positionData.quantity,
       entryPrice: positionData.entryPrice,
@@ -26,34 +31,37 @@ class PositionTracker {
       ...positionData,
     };
 
-    this.positions.set(symbol, position);
+    this.positions.set(key, position);
     logger.logPosition('opened', symbol, position);
     
     return position;
   }
 
   /**
-   * Get position by symbol
+   * Get position by symbol and exchange
    */
-  getPosition(symbol) {
-    return this.positions.get(symbol) || null;
+  getPosition(symbol, exchange = 'aster') {
+    const key = `${exchange.toLowerCase()}:${symbol}`;
+    return this.positions.get(key) || null;
   }
 
   /**
-   * Check if position exists
+   * Check if position exists for symbol and exchange
    */
-  hasPosition(symbol) {
-    return this.positions.has(symbol);
+  hasPosition(symbol, exchange = 'aster') {
+    const key = `${exchange.toLowerCase()}:${symbol}`;
+    return this.positions.has(key);
   }
 
   /**
-   * Remove position
+   * Remove position by symbol and exchange
    */
-  removePosition(symbol) {
-    const position = this.positions.get(symbol);
+  removePosition(symbol, exchange = 'aster') {
+    const key = `${exchange.toLowerCase()}:${symbol}`;
+    const position = this.positions.get(key);
     
     if (position) {
-      this.positions.delete(symbol);
+      this.positions.delete(key);
       logger.logPosition('closed', symbol, position);
     }
     

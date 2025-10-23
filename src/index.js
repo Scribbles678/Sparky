@@ -55,15 +55,34 @@ const PORT = process.env.PORT || 3000;
 
 // ==================== Initialize Components ====================
 
-const asterApi = new AsterAPI(
-  config.aster.apiKey,
-  config.aster.apiSecret,
-  config.aster.apiUrl
-);
+const ExchangeFactory = require('./exchanges/ExchangeFactory');
 
+// Create all configured exchange API instances
+const exchanges = ExchangeFactory.createAllExchanges(config);
+
+if (Object.keys(exchanges).length === 0) {
+  logger.error('No exchanges configured! Please add at least one exchange to config.json');
+  process.exit(1);
+}
+
+logger.info(`Configured exchanges: ${Object.keys(exchanges).join(', ')}`);
+
+// Create position tracker and executors for each exchange
 const positionTracker = new PositionTracker();
-const tradeExecutor = new TradeExecutor(asterApi, positionTracker, config);
-const positionUpdater = new PositionUpdater(asterApi, positionTracker, config);
+const tradeExecutors = {};
+const positionUpdaters = {};
+
+// Initialize executor and updater for each exchange
+for (const [exchangeName, exchangeApi] of Object.entries(exchanges)) {
+  tradeExecutors[exchangeName] = new TradeExecutor(exchangeApi, positionTracker, config);
+  positionUpdaters[exchangeName] = new PositionUpdater(exchangeApi, positionTracker, config);
+  logger.info(`✅ ${exchangeName.toUpperCase()} executor initialized`);
+}
+
+// For backward compatibility, also create single references (will use first exchange)
+const asterApi = exchanges.aster || Object.values(exchanges)[0];
+const tradeExecutor = tradeExecutors.aster || Object.values(tradeExecutors)[0];
+const positionUpdater = positionUpdaters.aster || Object.values(positionUpdaters)[0];
 
 // ==================== Express App Setup ====================
 
@@ -329,13 +348,25 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
       }
     }
 
-    // Execute the trade
+    // Determine which exchange to use
+    const exchange = alertData.exchange ? alertData.exchange.toLowerCase() : 'aster';
+    
+    // Validate exchange
+    if (!tradeExecutors[exchange]) {
+      return res.status(400).json({
+        success: false,
+        error: `Exchange "${exchange}" not configured. Available exchanges: ${Object.keys(tradeExecutors).join(', ')}`,
+      });
+    }
+
+    // Execute the trade on the correct exchange
     logger.info('Processing webhook', {
+      exchange: exchange.toUpperCase(),
       action: alertData.action,
       symbol: alertData.symbol,
     });
 
-    const result = await tradeExecutor.executeWebhook(alertData);
+    const result = await tradeExecutors[exchange].executeWebhook(alertData);
 
     const duration = Date.now() - startTime;
     logger.info(`Webhook processed successfully in ${duration}ms`, result);

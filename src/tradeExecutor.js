@@ -18,6 +18,8 @@ class TradeExecutor {
     this.api = asterApi;
     this.tracker = positionTracker;
     this.config = config;
+    // Determine exchange name from API instance
+    this.exchange = asterApi.exchangeName || asterApi.getExchangeName?.() || 'aster';
   }
 
   /**
@@ -70,8 +72,8 @@ class TradeExecutor {
 
     try {
       // Step 1: Check if position already exists
-      if (this.tracker.hasPosition(symbol)) {
-        const existingPosition = this.tracker.getPosition(symbol);
+      if (this.tracker.hasPosition(symbol, this.exchange)) {
+        const existingPosition = this.tracker.getPosition(symbol, this.exchange);
         
         // If same side, ignore the alert
         if (existingPosition.side === side) {
@@ -208,7 +210,7 @@ class TradeExecutor {
         takeProfitOrderId,
         stopLossPercent: finalStopLoss,
         takeProfitPercent: finalTakeProfit,
-      });
+      }, this.exchange);
 
       // Step 9: Log position to database
       const stopPrice = finalStopLoss ? calculateStopLoss(side, entryPrice, finalStopLoss) : null;
@@ -254,7 +256,7 @@ class TradeExecutor {
 
     try {
       // Check if we're tracking this position
-      const trackedPosition = this.tracker.getPosition(symbol);
+      const trackedPosition = this.tracker.getPosition(symbol, this.exchange);
       
       // Get actual position from exchange
       const exchangePosition = await this.api.getPosition(symbol);
@@ -264,7 +266,7 @@ class TradeExecutor {
         
         // Remove from tracker if it was there
         if (trackedPosition) {
-          this.tracker.removePosition(symbol);
+          this.tracker.removePosition(symbol, this.exchange);
         }
         
         return {
@@ -354,7 +356,7 @@ class TradeExecutor {
       await removePosition(symbol);
       
       // Remove from tracker
-      this.tracker.removePosition(symbol);
+      this.tracker.removePosition(symbol, this.exchange);
 
       logger.info(`Position closed successfully for ${symbol} with P&L: $${pnlUsd.toFixed(2)}`);
 
