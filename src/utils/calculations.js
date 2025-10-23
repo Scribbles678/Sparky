@@ -102,13 +102,24 @@ function roundPrice(price, decimals = 2) {
 }
 
 /**
- * Round quantity to appropriate decimal places based on symbol
+ * Round quantity to appropriate decimal places based on symbol and exchange
  * @param {number} quantity - Quantity to round
  * @param {string} symbol - Trading symbol (optional, for symbol-specific precision)
+ * @param {string} exchange - Exchange name (optional, for exchange-specific rules)
  * @returns {number} Rounded quantity
  */
-function roundQuantity(quantity, symbol = null) {
-  // Symbol-specific precision mapping (based on Aster DEX requirements)
+function roundQuantity(quantity, symbol = null, exchange = 'aster') {
+  // For stocks (Tradier), always use whole shares (0 decimals)
+  if (exchange && exchange.toLowerCase() === 'tradier') {
+    return Math.floor(quantity); // Stocks are whole shares
+  }
+  
+  // For forex (OANDA), use appropriate precision
+  if (exchange && exchange.toLowerCase() === 'oanda') {
+    return Math.round(quantity); // Forex units are usually whole numbers
+  }
+  
+  // Symbol-specific precision mapping (for crypto on Aster DEX)
   const precisionMap = {
     'BTCUSDT': 3,   // 0.001
     'ETHUSDT': 2,   // 0.01

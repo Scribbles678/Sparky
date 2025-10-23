@@ -5,6 +5,7 @@
 
 const AsterAPI = require('../asterApi');
 const OandaAPI = require('./oandaApi');
+const TradierAPI = require('./tradierApi');
 const logger = require('../utils/logger');
 
 class ExchangeFactory {
@@ -41,8 +42,14 @@ class ExchangeFactory {
         );
       
       case 'tradier':
-        // Placeholder for future Tradier implementation
-        throw new Error('Tradier exchange not yet implemented. Coming soon!');
+        if (!config.accountId || !config.accessToken) {
+          throw new Error('Tradier requires accountId and accessToken');
+        }
+        return new TradierAPI(
+          config.accountId,
+          config.accessToken,
+          config.environment || 'sandbox'
+        );
       
       default:
         throw new Error(`Unknown exchange: ${exchangeName}. Supported: aster, oanda, tradier`);

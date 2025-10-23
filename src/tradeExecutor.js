@@ -118,7 +118,7 @@ class TradeExecutor {
       
       // Step 4: Calculate position size (simple: position value / price)
       const quantity = calculatePositionSize(this.config.tradeAmount, entryPrice);
-      const roundedQuantity = roundQuantity(quantity, symbol);
+      const roundedQuantity = roundQuantity(quantity, symbol, this.exchange);
 
       logger.info(`Position size calculated: ${roundedQuantity} at ${entryPrice} ($${this.config.tradeAmount} position)`);
 
