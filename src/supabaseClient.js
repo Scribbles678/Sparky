@@ -35,6 +35,10 @@ async function logTrade(trade) {
       symbol: trade.symbol,
       side: trade.side,
       
+      // Asset Classification (REQUIRED for TradeFI dashboard)
+      asset_class: trade.assetClass || 'crypto', // Default to crypto for Aster DEX
+      exchange: trade.exchange || 'aster', // Default to aster for Aster DEX
+      
       // Entry
       entry_price: trade.entryPrice,
       entry_time: trade.entryTime || new Date().toISOString(),
@@ -99,6 +103,10 @@ async function savePosition(position) {
     const positionData = {
       symbol: position.symbol,
       side: position.side,
+      
+      // Asset Classification (REQUIRED for TradeFI dashboard)
+      asset_class: position.assetClass || 'crypto', // Default to crypto for Aster DEX
+      exchange: position.exchange || 'aster', // Default to aster for Aster DEX
       
       // Entry
       entry_price: position.entryPrice,

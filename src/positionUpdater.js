@@ -256,6 +256,9 @@ class PositionUpdater {
         pnlPercent: unrealizedPnlPercent,
         exitReason,
         orderId: position.orderId,
+        // REQUIRED for TradeFI dashboard integration
+        assetClass: 'crypto', // Aster DEX trades crypto
+        exchange: 'aster', // Aster DEX exchange
       });
       
       // Remove from database positions table

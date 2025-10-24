@@ -274,6 +274,9 @@ class TradeExecutor {
         currentPrice: entryPrice,
         unrealizedPnlUsd: 0,
         unrealizedPnlPercent: 0,
+        // REQUIRED for TradeFI dashboard integration
+        assetClass: 'crypto', // Aster DEX trades crypto
+        exchange: 'aster', // Aster DEX exchange
       });
 
       logger.info(`Position opened successfully for ${symbol}`);
@@ -390,6 +393,9 @@ class TradeExecutor {
           pnlPercent,
           orderId: closeResult.orderId,
           exitReason: 'MANUAL', // You can enhance this later to detect SL/TP hits
+          // REQUIRED for TradeFI dashboard integration
+          assetClass: 'crypto', // Aster DEX trades crypto
+          exchange: 'aster', // Aster DEX exchange
         });
       }
 
