@@ -171,6 +171,49 @@ function hassufficientMargin(availableMargin, requiredMargin, minMarginPercent =
   return marginAfterTrade >= minRequiredMargin;
 }
 
+/**
+ * Calculate pip value for Oanda symbols
+ * @param {string} symbol - Trading symbol (e.g., EUR_USD, GBP_USD)
+ * @param {number} price - Current price
+ * @returns {number} Pip value (0.0001 for most pairs, 0.01 for JPY pairs)
+ */
+function calculatePipValue(symbol, price) {
+  // JPY pairs have different pip values
+  const jpyPairs = ['USD_JPY', 'EUR_JPY', 'GBP_JPY', 'AUD_JPY', 'CAD_JPY', 'CHF_JPY', 'NZD_JPY'];
+  
+  if (jpyPairs.includes(symbol)) {
+    return 0.01; // 1 pip = 0.01 for JPY pairs
+  }
+  
+  return 0.0001; // 1 pip = 0.0001 for most pairs
+}
+
+/**
+ * Convert percentage to pips for Oanda
+ * @param {string} symbol - Trading symbol
+ * @param {number} price - Current price
+ * @param {number} percentage - Percentage (e.g., 1.5 for 1.5%)
+ * @returns {number} Equivalent pips
+ */
+function percentageToPips(symbol, price, percentage) {
+  const pipValue = calculatePipValue(symbol, price);
+  const priceMove = price * (percentage / 100);
+  return Math.round(priceMove / pipValue);
+}
+
+/**
+ * Convert pips to percentage for Oanda
+ * @param {string} symbol - Trading symbol
+ * @param {number} price - Current price
+ * @param {number} pips - Number of pips
+ * @returns {number} Equivalent percentage
+ */
+function pipsToPercentage(symbol, price, pips) {
+  const pipValue = calculatePipValue(symbol, price);
+  const priceMove = pips * pipValue;
+  return (priceMove / price) * 100;
+}
+
 module.exports = {
   calculatePositionSize,
   calculateStopLoss,
@@ -179,5 +222,8 @@ module.exports = {
   roundPrice,
   roundQuantity,
   hassufficientMargin,
+  calculatePipValue,
+  percentageToPips,
+  pipsToPercentage,
 };
 

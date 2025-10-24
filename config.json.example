@@ -5,19 +5,22 @@
   "aster": {
     "apiUrl": "https://fapi.asterdex.com",
     "apiKey": "YOUR_ASTER_API_KEY",
-    "apiSecret": "YOUR_ASTER_API_SECRET"
+    "apiSecret": "YOUR_ASTER_API_SECRET",
+    "tradeAmount": 75
   },
   
   "oanda": {
     "accountId": "YOUR_OANDA_ACCOUNT_ID",
     "accessToken": "YOUR_OANDA_ACCESS_TOKEN",
-    "environment": "practice"
+    "environment": "practice",
+    "tradeAmount": 200
   },
   
   "tradier": {
     "accountId": "YOUR_TRADIER_ACCOUNT_ID",
     "accessToken": "YOUR_TRADIER_ACCESS_TOKEN",
-    "environment": "sandbox"
+    "environment": "sandbox",
+    "tradeAmount": 150
   },
   
   "riskManagement": {

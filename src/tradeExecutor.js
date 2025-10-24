@@ -59,6 +59,9 @@ class TradeExecutor {
       stop_loss_percent,
       takeProfit,
       take_profit_percent,
+      trailingStop,
+      trailing_stop_pips,
+      useTrailingStop,
     } = alertData;
 
     const side = action.toUpperCase();
@@ -67,6 +70,8 @@ class TradeExecutor {
     const finalOrderType = (orderType || order_type || 'market').toLowerCase();
     const finalStopLoss = stopLoss || stop_loss_percent;
     const finalTakeProfit = takeProfit || take_profit_percent;
+    const finalTrailingStop = trailingStop || trailing_stop_pips;
+    const finalUseTrailingStop = useTrailingStop || false;
 
     logger.info(`Opening ${side} position for ${symbol}`);
 
@@ -104,11 +109,16 @@ class TradeExecutor {
 
       // Step 2: Check available margin (optional, for safety)
       const availableMargin = await this.api.getAvailableMargin();
-      const requiredPositionSize = this.config.tradeAmount;
+      
+      // Step 3: Get exchange-specific trade amount
+      const exchangeConfig = this.config[this.exchange] || {};
+      const exchangeTradeAmount = exchangeConfig.tradeAmount || this.config.tradeAmount;
+      const positionMultiplier = exchangeConfig.positionMultiplier || 1.0;
+      const finalTradeAmount = exchangeTradeAmount * positionMultiplier;
+      
+      logger.info(`Available margin: ${availableMargin}, Position size: $${finalTradeAmount} (${this.exchange} exchange)`);
 
-      logger.info(`Available margin: ${availableMargin}, Position size: ${requiredPositionSize}`);
-
-      // Step 3: Get current market price if not provided (for MARKET orders)
+      // Step 4: Get current market price if not provided (for MARKET orders)
       let entryPrice = price;
       if (!entryPrice || finalOrderType === 'market') {
         const ticker = await this.api.getTicker(symbol);
@@ -116,11 +126,11 @@ class TradeExecutor {
         logger.info(`Fetched current market price for ${symbol}: ${entryPrice}`);
       }
       
-      // Step 4: Calculate position size (simple: position value / price)
-      const quantity = calculatePositionSize(this.config.tradeAmount, entryPrice);
+      // Step 5: Calculate position size (simple: position value / price)
+      const quantity = calculatePositionSize(finalTradeAmount, entryPrice);
       const roundedQuantity = roundQuantity(quantity, symbol, this.exchange);
 
-      logger.info(`Position size calculated: ${roundedQuantity} at ${entryPrice} ($${this.config.tradeAmount} position)`);
+      logger.info(`Position size calculated: ${roundedQuantity} at ${entryPrice} ($${finalTradeAmount} position)`);
 
       // Step 5: Place entry order (exchange will use its max leverage setting)
       let orderResult;
@@ -138,31 +148,59 @@ class TradeExecutor {
         price: entryPrice,
       });
 
-      // Step 6: Place stop loss
+      // Step 6: Place stop loss (regular or trailing)
       let stopLossOrderId = null;
+      let stopLossType = 'REGULAR';
       
-      if (finalStopLoss) {
+      if (finalStopLoss || finalTrailingStop) {
         try {
-          const stopPrice = calculateStopLoss(side, entryPrice, finalStopLoss);
-          const roundedStopPrice = roundPrice(stopPrice);
-          const stopSide = getOppositeSide(side);
-
-          const stopLossResult = await this.api.placeStopLoss(
-            symbol,
-            stopSide,
-            roundedQuantity,
-            roundedStopPrice
-          );
-
-          stopLossOrderId = stopLossResult.orderId;
+          // Check if this is Oanda and we want trailing stop
+          const isOanda = this.api.exchangeName === 'oanda';
+          const useTrailing = isOanda && (finalUseTrailingStop || finalTrailingStop);
           
-          const dollarLoss = (this.config.tradeAmount * finalStopLoss / 100).toFixed(2);
-          
-          logger.info(`Stop loss placed at ${roundedStopPrice}`, {
-            orderId: stopLossOrderId,
-            percent: finalStopLoss,
-            dollarAmount: `$${dollarLoss}`,
-          });
+          if (useTrailing && finalTrailingStop) {
+            // Place trailing stop for Oanda
+            const trailingDistance = parseFloat(finalTrailingStop);
+            
+            const stopLossResult = await this.api.placeTrailingStopLoss(
+              symbol,
+              side,
+              roundedQuantity,
+              trailingDistance
+            );
+
+            stopLossOrderId = stopLossResult.orderId;
+            stopLossType = 'TRAILING';
+            
+            logger.info(`Trailing stop loss placed with ${trailingDistance} pips distance`, {
+              orderId: stopLossOrderId,
+              distance: trailingDistance,
+              type: 'TRAILING',
+            });
+          } else {
+            // Place regular stop loss
+            const stopPrice = calculateStopLoss(side, entryPrice, finalStopLoss);
+            const roundedStopPrice = roundPrice(stopPrice);
+            const stopSide = getOppositeSide(side);
+
+            const stopLossResult = await this.api.placeStopLoss(
+              symbol,
+              stopSide,
+              roundedQuantity,
+              roundedStopPrice
+            );
+
+            stopLossOrderId = stopLossResult.orderId;
+            
+            const dollarLoss = (this.config.tradeAmount * finalStopLoss / 100).toFixed(2);
+            
+            logger.info(`Stop loss placed at ${roundedStopPrice}`, {
+              orderId: stopLossOrderId,
+              percent: finalStopLoss,
+              dollarAmount: `$${dollarLoss}`,
+              type: 'REGULAR',
+            });
+          }
         } catch (error) {
           logger.logError('Failed to place stop loss', error, { symbol });
           // Don't fail the entire trade if stop loss fails, but log it prominently
@@ -210,6 +248,9 @@ class TradeExecutor {
         takeProfitOrderId,
         stopLossPercent: finalStopLoss,
         takeProfitPercent: finalTakeProfit,
+        stopLossType: stopLossType,
+        trailingStopDistance: finalTrailingStop,
+        exchange: this.api.exchangeName,
       }, this.exchange);
 
       // Step 9: Log position to database

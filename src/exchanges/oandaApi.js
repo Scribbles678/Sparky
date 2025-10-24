@@ -267,6 +267,40 @@ class OandaAPI extends BaseExchangeAPI {
   }
 
   /**
+   * Place trailing stop loss order (OANDA native)
+   * @param {string} symbol - Trading symbol
+   * @param {string} side - BUY or SELL
+   * @param {number} quantity - Position size
+   * @param {number} distance - Trailing distance in pips
+   * @param {string} timeInForce - GTC, GTD, or FOK
+   */
+  async placeTrailingStopLoss(symbol, side, quantity, distance, timeInForce = 'GTC') {
+    // OANDA uses negative units for short positions
+    const units = side.toUpperCase() === 'BUY' ? -quantity : quantity;
+    
+    const orderData = {
+      order: {
+        type: 'TRAILING_STOP_IF_DONE',
+        instrument: symbol,
+        units: units.toString(),
+        distance: distance.toString(),
+        timeInForce: timeInForce,
+        positionFill: 'REDUCE_ONLY',
+        triggerCondition: 'DEFAULT',
+      }
+    };
+    
+    logger.info('Placing OANDA trailing stop loss', orderData);
+    const response = await this.makeRequest('POST', `/v3/accounts/${this.accountId}/orders`, orderData);
+    
+    return {
+      orderId: response.orderCreateTransaction?.id,
+      status: 'NEW',
+      type: 'TRAILING_STOP',
+    };
+  }
+
+  /**
    * Place take profit order
    */
   async placeTakeProfit(symbol, side, quantity, takeProfitPrice) {
