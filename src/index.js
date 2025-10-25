@@ -8,6 +8,7 @@ const AsterAPI = require('./asterApi');
 const PositionTracker = require('./positionTracker');
 const TradeExecutor = require('./tradeExecutor');
 const PositionUpdater = require('./positionUpdater');
+const strategyRoutes = require('./api/strategies');
 
 // ==================== Configuration ====================
 
@@ -141,6 +142,9 @@ app.use((req, res, next) => {
 });
 
 // ==================== Routes ====================
+
+// Strategy management routes
+app.use('/api/strategies', strategyRoutes);
 
 /**
  * Health check endpoint

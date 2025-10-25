@@ -12,12 +12,14 @@ const {
   savePosition,
   removePosition,
 } = require('./supabaseClient');
+const StrategyManager = require('./strategyManager');
 
 class TradeExecutor {
   constructor(asterApi, positionTracker, config) {
     this.api = asterApi;
     this.tracker = positionTracker;
     this.config = config;
+    this.strategyManager = new StrategyManager();
     // Determine exchange name from API instance
     this.exchange = asterApi.exchangeName || asterApi.getExchangeName?.() || 'aster';
   }
@@ -27,13 +29,26 @@ class TradeExecutor {
    */
   async executeWebhook(alertData) {
     try {
-      const { action, symbol } = alertData;
+      const { action, symbol, strategy } = alertData;
 
       logger.logWebhook(alertData);
 
+      // Validate strategy if provided
+      if (strategy) {
+        const strategyInfo = this.strategyManager.validateStrategy(strategy);
+        if (!strategyInfo) {
+          return {
+            success: false,
+            action: 'rejected',
+            message: `Strategy '${strategy}' not found or inactive`,
+          };
+        }
+        logger.info(`📊 Executing trade with strategy: ${strategy}`);
+      }
+
       // Route to appropriate handler
       if (action.toLowerCase() === 'close') {
-        return await this.closePosition(symbol);
+        return await this.closePosition(symbol, strategy);
       } else if (['buy', 'sell'].includes(action.toLowerCase())) {
         return await this.openPosition(alertData);
       } else {
@@ -257,6 +272,13 @@ class TradeExecutor {
       const stopPrice = finalStopLoss ? calculateStopLoss(side, entryPrice, finalStopLoss) : null;
       const tpPrice = finalTakeProfit ? calculateTakeProfit(side, entryPrice, finalTakeProfit) : null;
       
+      // Get strategy ID if strategy is provided
+      let strategyId = null;
+      if (alertData.strategy) {
+        const strategyInfo = this.strategyManager.getStrategy(alertData.strategy);
+        strategyId = strategyInfo?.id || null;
+      }
+
       await savePosition({
         symbol,
         side,
@@ -277,6 +299,7 @@ class TradeExecutor {
         // REQUIRED for TradeFI dashboard integration
         assetClass: 'crypto', // Aster DEX trades crypto
         exchange: 'aster', // Aster DEX exchange
+        strategyId: strategyId, // Strategy tracking
       });
 
       logger.info(`Position opened successfully for ${symbol}`);
@@ -295,7 +318,7 @@ class TradeExecutor {
   /**
    * Close an existing position
    */
-  async closePosition(symbol) {
+  async closePosition(symbol, strategy = null) {
     logger.info(`Closing position for ${symbol}`);
 
     try {
@@ -388,6 +411,13 @@ class TradeExecutor {
         const positionMultiplier = exchangeConfig.positionMultiplier || 1.0;
         const finalTradeAmount = exchangeTradeAmount * positionMultiplier;
         
+        // Get strategy ID if strategy is provided
+        let strategyId = null;
+        if (strategy) {
+          const strategyInfo = this.strategyManager.getStrategy(strategy);
+          strategyId = strategyInfo?.id || null;
+        }
+
         await logTrade({
           symbol,
           side: positionSide,
@@ -408,7 +438,18 @@ class TradeExecutor {
           // REQUIRED for TradeFI dashboard integration
           assetClass: 'crypto', // Aster DEX trades crypto
           exchange: 'aster', // Aster DEX exchange
+          strategyId: strategyId, // Strategy tracking
         });
+
+        // Update strategy performance metrics
+        if (strategy) {
+          await this.strategyManager.updateStrategyMetrics(strategy, {
+            pnlUsd,
+            pnlPercent,
+            symbol,
+            side: positionSide
+          });
+        }
       }
 
       // Remove position from database
