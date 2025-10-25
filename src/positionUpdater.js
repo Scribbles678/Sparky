@@ -121,7 +121,7 @@ class PositionUpdater {
   calculateUnrealizedPnL(position, currentPrice) {
     const entryPrice = position.entryPrice;
     const quantity = position.quantity;
-    const positionSizeUsd = this.config.tradeAmount;
+    const positionSizeUsd = this.getExchangeTradeAmount();
 
     let unrealizedPnlUsd = 0;
 
@@ -239,7 +239,7 @@ class PositionUpdater {
         exitPrice,
         exitTime: new Date().toISOString(),
         quantity: position.quantity,
-        positionSizeUsd: this.config.tradeAmount,
+        positionSizeUsd: this.getExchangeTradeAmount(),
         stopLossPrice: position.stopLossPercent 
           ? (position.side === 'BUY' 
               ? position.entryPrice * (1 - position.stopLossPercent / 100)
@@ -271,6 +271,16 @@ class PositionUpdater {
     } catch (error) {
       logger.logError(`Error handling closed position ${position.symbol}`, error);
     }
+  }
+
+  /**
+   * Get exchange-specific trade amount
+   */
+  getExchangeTradeAmount() {
+    const exchangeConfig = this.config[this.api.exchangeName] || {};
+    const exchangeTradeAmount = exchangeConfig.tradeAmount || 600;
+    const positionMultiplier = exchangeConfig.positionMultiplier || 1.0;
+    return exchangeTradeAmount * positionMultiplier;
   }
 
   /**
