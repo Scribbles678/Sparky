@@ -392,7 +392,7 @@ class TradeExecutor {
           symbol,
           side: positionSide,
           entryPrice: trackedPosition.entryPrice || entryPrice,
-          entryTime: trackedPosition.timestamp || new Date().toISOString(),
+          entryTime: trackedPosition.timestamp ? new Date(trackedPosition.timestamp).toISOString() : new Date().toISOString(),
           exitPrice,
           exitTime: new Date().toISOString(),
           quantity,
