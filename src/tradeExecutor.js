@@ -112,7 +112,7 @@ class TradeExecutor {
       
       // Step 3: Get exchange-specific trade amount
       const exchangeConfig = this.config[this.exchange] || {};
-      const exchangeTradeAmount = exchangeConfig.tradeAmount || this.config.tradeAmount;
+      const exchangeTradeAmount = exchangeConfig.tradeAmount || 600; // Fallback to 600 if not specified
       const positionMultiplier = exchangeConfig.positionMultiplier || 1.0;
       const finalTradeAmount = exchangeTradeAmount * positionMultiplier;
       
@@ -263,7 +263,7 @@ class TradeExecutor {
         entryPrice,
         entryTime: new Date().toISOString(),
         quantity: roundedQuantity,
-        positionSizeUsd: this.config.tradeAmount,
+        positionSizeUsd: finalTradeAmount,
         stopLossPrice: stopPrice,
         takeProfitPrice: tpPrice,
         stopLossPercent: finalStopLoss,
@@ -376,6 +376,12 @@ class TradeExecutor {
 
       // Log completed trade to database
       if (trackedPosition) {
+        // Calculate trade amount for this exchange
+        const exchangeConfig = this.config[this.exchange] || {};
+        const exchangeTradeAmount = exchangeConfig.tradeAmount || 600;
+        const positionMultiplier = exchangeConfig.positionMultiplier || 1.0;
+        const finalTradeAmount = exchangeTradeAmount * positionMultiplier;
+        
         await logTrade({
           symbol,
           side: positionSide,
@@ -384,7 +390,7 @@ class TradeExecutor {
           exitPrice,
           exitTime: new Date().toISOString(),
           quantity,
-          positionSizeUsd: this.config.tradeAmount,
+          positionSizeUsd: finalTradeAmount,
           stopLossPrice: trackedPosition.stopLossPercent ? calculateStopLoss(positionSide, entryPrice, trackedPosition.stopLossPercent) : null,
           takeProfitPrice: trackedPosition.takeProfitPercent ? calculateTakeProfit(positionSide, entryPrice, trackedPosition.takeProfitPercent) : null,
           stopLossPercent: trackedPosition.stopLossPercent,
