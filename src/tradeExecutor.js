@@ -192,7 +192,7 @@ class TradeExecutor {
 
             stopLossOrderId = stopLossResult.orderId;
             
-            const dollarLoss = (this.config.tradeAmount * finalStopLoss / 100).toFixed(2);
+            const dollarLoss = (finalTradeAmount * finalStopLoss / 100).toFixed(2);
             
             logger.info(`Stop loss placed at ${roundedStopPrice}`, {
               orderId: stopLossOrderId,
@@ -225,7 +225,7 @@ class TradeExecutor {
 
           takeProfitOrderId = takeProfitResult.orderId;
           
-          const dollarProfit = (this.config.tradeAmount * finalTakeProfit / 100).toFixed(2);
+          const dollarProfit = (finalTradeAmount * finalTakeProfit / 100).toFixed(2);
           
           logger.info(`Take profit placed at ${roundedTpPrice}`, {
             orderId: takeProfitOrderId,
@@ -329,6 +329,12 @@ class TradeExecutor {
       const entryPrice = parseFloat(exchangePosition.entryPrice);
       const exitPrice = parseFloat(exchangePosition.markPrice || exchangePosition.lastPrice || 0);
       
+      // Calculate trade amount for this exchange
+      const exchangeConfig = this.config[this.exchange] || {};
+      const exchangeTradeAmount = exchangeConfig.tradeAmount || 600;
+      const positionMultiplier = exchangeConfig.positionMultiplier || 1.0;
+      const finalTradeAmount = exchangeTradeAmount * positionMultiplier;
+      
       // Calculate P&L
       const positionSide = positionAmt > 0 ? 'BUY' : 'SELL';
       let pnlUsd = 0;
@@ -341,7 +347,7 @@ class TradeExecutor {
         pnlUsd = (entryPrice - exitPrice) * quantity;
       }
       
-      const pnlPercent = (pnlUsd / this.config.tradeAmount) * 100;
+      const pnlPercent = (pnlUsd / finalTradeAmount) * 100;
 
       // Close the position
       const closeResult = await this.api.closePosition(symbol, side, quantity);
