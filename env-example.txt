@@ -33,6 +33,15 @@ TRADIER_TOKEN=your_tradier_token_here
 TRADIER_ACCOUNT_ID=VA55402267
 
 # =============================================================================
+# LIGHTER DEX (CRYPTO PERPS) CONFIGURATION
+# =============================================================================
+LIGHTER_API_KEY=your_lighter_api_key_here
+LIGHTER_PRIVATE_KEY=your_eth_private_key_here
+LIGHTER_ACCOUNT_INDEX=0
+LIGHTER_API_KEY_INDEX=2
+LIGHTER_BASE_URL=https://mainnet.zklighter.elliot.ai
+
+# =============================================================================
 # TRADING CONFIGURATION
 # =============================================================================
 # Webhook secret for TradingView alerts

@@ -1,0 +1,5 @@
+What We'll Build First (MVP - Phase 1)
+Real-Time Stats Overview - Today's P&L, Win Rate, Open Positions count, Total Trades
+Open Positions Table - Live positions with unrealized P&L
+Recent Trades History - Last 20 trades with P&L
+Simple P&L Chart - Cumulative P&L over time (7 or 30 days)

@@ -6,6 +6,8 @@
 const AsterAPI = require('../asterApi');
 const OandaAPI = require('./oandaApi');
 const TradierAPI = require('./tradierApi');
+const LighterAPI = require('./lighterApi');
+const { HyperliquidAPI } = require('./hyperliquidApi');
 const logger = require('../utils/logger');
 
 class ExchangeFactory {
@@ -51,8 +53,31 @@ class ExchangeFactory {
           config.environment || 'sandbox'
         );
       
+      case 'lighter':
+        if (!config.apiKey || !config.privateKey || !config.accountIndex) {
+          throw new Error('Lighter requires apiKey, privateKey, and accountIndex');
+        }
+        return new LighterAPI(
+          config.apiKey,
+          config.privateKey,
+          config.accountIndex,
+          config.apiKeyIndex || 2,
+          config.baseUrl || 'https://mainnet.zklighter.elliot.ai'
+        );
+      
+      case 'hyperliquid':
+        if (!config.apiKey || !config.privateKey) {
+          throw new Error('Hyperliquid requires apiKey and privateKey');
+        }
+        return new HyperliquidAPI(
+          config.apiKey,
+          config.privateKey,
+          config.baseUrl || 'https://api.hyperliquid.xyz',
+          config.isTestnet || false
+        );
+      
       default:
-        throw new Error(`Unknown exchange: ${exchangeName}. Supported: aster, oanda, tradier`);
+        throw new Error(`Unknown exchange: ${exchangeName}. Supported: aster, oanda, tradier, lighter, hyperliquid`);
     }
   }
 
@@ -94,6 +119,26 @@ class ExchangeFactory {
       }
     }
     
+    // Create Lighter instance if configured
+    if (fullConfig.lighter && fullConfig.lighter.apiKey) {
+      try {
+        exchanges.lighter = this.createExchange('lighter', fullConfig.lighter);
+        logger.info('✅ Lighter DEX API initialized');
+      } catch (error) {
+        logger.warn(`⚠️  Failed to initialize Lighter: ${error.message}`);
+      }
+    }
+    
+    // Create Hyperliquid instance if configured
+    if (fullConfig.hyperliquid && fullConfig.hyperliquid.apiKey) {
+      try {
+        exchanges.hyperliquid = this.createExchange('hyperliquid', fullConfig.hyperliquid);
+        logger.info('✅ Hyperliquid API initialized');
+      } catch (error) {
+        logger.warn(`⚠️  Failed to initialize Hyperliquid: ${error.message}`);
+      }
+    }
+    
     return exchanges;
   }
 
@@ -102,7 +147,7 @@ class ExchangeFactory {
    * @returns {array} List of supported exchange names
    */
   static getSupportedExchanges() {
-    return ['aster', 'oanda', 'tradier'];
+    return ['aster', 'oanda', 'tradier', 'lighter', 'hyperliquid'];
   }
 }
 

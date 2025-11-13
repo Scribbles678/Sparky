@@ -119,7 +119,7 @@ function roundQuantity(quantity, symbol = null, exchange = 'aster') {
     return Math.round(quantity); // Forex units are usually whole numbers
   }
   
-  // Symbol-specific precision mapping (for crypto on Aster DEX)
+  // Symbol-specific precision mapping (for crypto on Aster DEX and Lighter DEX)
   const precisionMap = {
     'BTCUSDT': 3,   // 0.001
     'ETHUSDT': 2,   // 0.01
@@ -139,6 +139,10 @@ function roundQuantity(quantity, symbol = null, exchange = 'aster') {
     'APTUSDT': 1,   // 0.1
     'OPUSDT': 0,    // 1
     'ARBUSDT': 0,   // 1
+    // Lighter DEX specific symbols (if different from Aster)
+    'BTC-USD': 3,   // 0.001
+    'ETH-USD': 2,   // 0.01
+    'SOL-USD': 1,   // 0.1
   };
   
   // Try to get symbol-specific precision

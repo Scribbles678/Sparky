@@ -36,7 +36,7 @@ async function logTrade(trade) {
       side: trade.side,
       
       // Asset Classification (REQUIRED for TradeFI dashboard)
-      asset_class: trade.assetClass || 'crypto', // Default to crypto for Aster DEX
+      asset_class: trade.assetClass || 'crypto', // Default to crypto for Aster DEX and Lighter DEX
       exchange: trade.exchange || 'aster', // Default to aster for Aster DEX
       
       // Entry
@@ -100,17 +100,32 @@ async function savePosition(position) {
   }
 
   try {
+    // Check if position already exists to preserve entry_time
+    let existingEntryTime = null;
+    if (position.preserveEntryTime !== false) { // Default to preserving entry_time
+      const { data: existing } = await supabase
+        .from('positions')
+        .select('entry_time')
+        .eq('symbol', position.symbol)
+        .single();
+      
+      if (existing && existing.entry_time) {
+        existingEntryTime = existing.entry_time;
+      }
+    }
+    
     const positionData = {
       symbol: position.symbol,
       side: position.side,
       
       // Asset Classification (REQUIRED for TradeFI dashboard)
-      asset_class: position.assetClass || 'crypto', // Default to crypto for Aster DEX
+      asset_class: position.assetClass || 'crypto', // Default to crypto for Aster DEX and Lighter DEX
       exchange: position.exchange || 'aster', // Default to aster for Aster DEX
       
       // Entry
       entry_price: position.entryPrice,
-      entry_time: position.entryTime || new Date().toISOString(),
+      // Preserve existing entry_time if position exists, otherwise use provided or current time
+      entry_time: existingEntryTime || position.entryTime || new Date().toISOString(),
       
       // Position
       quantity: position.quantity,

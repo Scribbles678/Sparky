@@ -5,7 +5,7 @@
  */
 
 const logger = require('./utils/logger');
-const { updatePositionPnL, logTrade, removePosition } = require('./supabaseClient');
+const { updatePositionPnL, logTrade, removePosition, savePosition } = require('./supabaseClient');
 const { calculatePositionSize } = require('./utils/calculations');
 
 class PositionUpdater {
@@ -143,43 +143,133 @@ class PositionUpdater {
   }
 
   /**
-   * Sync tracked positions with exchange to detect closed positions
+   * Sync tracked positions with exchange to detect closed positions AND manually opened positions
    */
   async syncWithExchange() {
     try {
-      logger.info('Auto-syncing positions with exchange...');
+      const exchangeName = this.api.exchangeName || 'aster';
+      logger.info(`Auto-syncing positions with ${exchangeName.toUpperCase()} exchange...`);
       
-      // Get all tracked positions
-      const trackedPositions = this.tracker.getAllPositions();
-      
-      if (trackedPositions.length === 0) {
-        return; // Nothing to sync
-      }
+      // Get tracked positions for THIS exchange only
+      const allTrackedPositions = this.tracker.getAllPositions();
+      const trackedPositions = allTrackedPositions.filter(p => p.exchange === exchangeName);
+      const trackedSymbols = trackedPositions.map(p => p.symbol);
       
       // Get actual positions from exchange
       const exchangePositions = await this.api.getPositions();
-      const openSymbols = exchangePositions
-        .filter(p => parseFloat(p.positionAmt) !== 0)
-        .map(p => p.symbol);
+      const openPositions = exchangePositions.filter(p => parseFloat(p.positionAmt) !== 0);
+      const openSymbols = openPositions.map(p => p.symbol);
       
-      // Find positions that are tracked but no longer open on exchange
+      // 1. Find positions that are tracked but no longer open on exchange (manually closed)
       const closedPositions = trackedPositions.filter(
         tracked => !openSymbols.includes(tracked.symbol)
       );
       
-      if (closedPositions.length === 0) {
-        logger.info('All tracked positions still open on exchange');
-        return;
+      // 2. Find positions that are open on exchange but NOT tracked (manually opened)
+      const manuallyOpenedPositions = openPositions.filter(
+        exchangePos => !trackedSymbols.includes(exchangePos.symbol)
+      );
+      
+      // Process manually closed positions
+      if (closedPositions.length > 0) {
+        logger.info(`Detected ${closedPositions.length} position(s) closed on ${exchangeName.toUpperCase()}`);
+        for (const position of closedPositions) {
+          await this.handleClosedPosition(position);
+        }
       }
       
-      logger.info(`Detected ${closedPositions.length} position(s) closed on exchange`);
+      // Process manually opened positions
+      if (manuallyOpenedPositions.length > 0) {
+        logger.info(`Detected ${manuallyOpenedPositions.length} manually opened position(s) on ${exchangeName.toUpperCase()}`);
+        for (const exchangePos of manuallyOpenedPositions) {
+          await this.handleManuallyOpenedPosition(exchangePos);
+        }
+      }
       
-      // Process each closed position
-      for (const position of closedPositions) {
-        await this.handleClosedPosition(position);
+      if (closedPositions.length === 0 && manuallyOpenedPositions.length === 0) {
+        logger.info(`All ${exchangeName.toUpperCase()} positions in sync with exchange`);
       }
     } catch (error) {
       logger.logError('Error in syncWithExchange', error);
+    }
+  }
+  
+  /**
+   * Handle a position that was manually opened on the exchange
+   */
+  async handleManuallyOpenedPosition(exchangePosition) {
+    try {
+      const symbol = exchangePosition.symbol;
+      const positionAmt = parseFloat(exchangePosition.positionAmt);
+      const side = positionAmt > 0 ? 'BUY' : 'SELL';
+      const quantity = Math.abs(positionAmt);
+      const entryPrice = parseFloat(exchangePosition.entryPrice);
+      const exchangeName = this.api.exchangeName || 'aster';
+      
+      logger.info(`Detected manually opened position: ${symbol} (${side} ${quantity} @ $${entryPrice})`);
+      
+      // Get current price for P&L calculation
+      const ticker = await this.api.getTicker(symbol);
+      const currentPrice = parseFloat(ticker.lastPrice || ticker.price);
+      
+      // Calculate position size (estimate based on entry price and quantity)
+      const positionSizeUsd = entryPrice * quantity;
+      
+      // Calculate initial unrealized P&L
+      let unrealizedPnlUsd = 0;
+      if (side === 'BUY') {
+        unrealizedPnlUsd = (currentPrice - entryPrice) * quantity;
+      } else {
+        unrealizedPnlUsd = (entryPrice - currentPrice) * quantity;
+      }
+      const unrealizedPnlPercent = (unrealizedPnlUsd / positionSizeUsd) * 100;
+      
+      // Determine asset class based on exchange
+      let assetClass = 'crypto';
+      if (exchangeName === 'oanda') {
+        assetClass = 'forex';
+      } else if (exchangeName === 'tradier') {
+        assetClass = 'stock';
+      }
+      
+      // Add to in-memory tracker
+      const position = this.tracker.addPosition(symbol, {
+        side,
+        quantity,
+        entryPrice,
+        leverage: exchangePosition.leverage || 1,
+        orderId: null, // Unknown for manual trades
+        stopLossOrderId: null,
+        takeProfitOrderId: null,
+        manuallyOpened: true, // Flag to indicate this was manually opened
+      }, exchangeName);
+      
+      // Save to Supabase
+      await savePosition({
+        symbol,
+        side,
+        entryPrice,
+        entryTime: new Date().toISOString(), // Use current time as entry time (we don't know actual entry time)
+        quantity,
+        positionSizeUsd,
+        stopLossPrice: null, // Unknown for manual trades
+        takeProfitPrice: null, // Unknown for manual trades
+        stopLossPercent: null,
+        takeProfitPercent: null,
+        entryOrderId: null,
+        stopLossOrderId: null,
+        takeProfitOrderId: null,
+        currentPrice,
+        unrealizedPnlUsd: parseFloat(unrealizedPnlUsd.toFixed(4)),
+        unrealizedPnlPercent: parseFloat(unrealizedPnlPercent.toFixed(4)),
+        assetClass,
+        exchange: exchangeName,
+        notes: 'Manually opened position detected by bot',
+      });
+      
+      logger.info(`✅ Manually opened position ${symbol} registered in Supabase`);
+    } catch (error) {
+      logger.logError(`Error handling manually opened position ${exchangePosition.symbol}`, error);
     }
   }
   
@@ -200,9 +290,10 @@ class PositionUpdater {
         exitPrice
       );
       
-      // Determine exit reason (check if close to TP or SL)
+      // Determine exit reason (check if close to TP or SL first)
       let exitReason = 'AUTO_CLOSED';
       
+      // Check if closed near stop loss
       if (position.stopLossPercent) {
         const slPrice = position.side === 'BUY' 
           ? position.entryPrice * (1 - position.stopLossPercent / 100)
@@ -214,6 +305,7 @@ class PositionUpdater {
         }
       }
       
+      // Check if closed near take profit (only if not already marked as SL)
       if (position.takeProfitPercent && exitReason === 'AUTO_CLOSED') {
         const tpPrice = position.side === 'BUY'
           ? position.entryPrice * (1 + position.takeProfitPercent / 100)
@@ -223,6 +315,11 @@ class PositionUpdater {
         if (tpDiff < 0.01) { // Within 1% of TP price
           exitReason = 'TAKE_PROFIT';
         }
+      }
+      
+      // If not TP/SL and was manually opened, mark as manual
+      if (exitReason === 'AUTO_CLOSED' && position.manuallyOpened) {
+        exitReason = 'MANUAL';
       }
       
       // Log to database
@@ -257,15 +354,16 @@ class PositionUpdater {
         exitReason,
         orderId: position.orderId,
         // REQUIRED for TradeFI dashboard integration
-        assetClass: 'crypto', // Aster DEX trades crypto
-        exchange: 'aster', // Aster DEX exchange
+        assetClass: 'crypto', // Aster DEX and Lighter DEX trade crypto
+        exchange: this.api.exchangeName || 'aster', // Use actual exchange name
       });
       
       // Remove from database positions table
       await removePosition(position.symbol);
       
-      // Remove from tracker
-      this.tracker.removePosition(position.symbol);
+      // Remove from tracker (use exchange if available)
+      const exchange = position.exchange || this.api.exchangeName || 'aster';
+      this.tracker.removePosition(position.symbol, exchange);
       
       logger.info(`✅ ${position.symbol} closed: ${exitReason}, P&L: $${unrealizedPnlUsd.toFixed(2)} (${unrealizedPnlPercent.toFixed(2)}%)`);
     } catch (error) {

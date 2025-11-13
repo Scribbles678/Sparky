@@ -91,34 +91,45 @@ class TradeExecutor {
     logger.info(`Opening ${side} position for ${symbol}`);
 
     try {
-      // Step 1: Check if position already exists
+      // Step 1: Check if position already exists (verify with exchange to handle manual closes)
       if (this.tracker.hasPosition(symbol, this.exchange)) {
-        const existingPosition = this.tracker.getPosition(symbol, this.exchange);
+        // Verify position actually exists on exchange (handles case where position was manually closed)
+        const positionExistsOnExchange = await this.api.hasOpenPosition(symbol);
         
-        // If same side, ignore the alert
-        if (existingPosition.side === side) {
-          logger.info(`Already have ${side} position for ${symbol}, ignoring duplicate signal`);
-          return {
-            success: false,
-            action: 'skipped',
-            message: `Already have ${side} position for ${symbol}. Waiting for TP/SL or opposite signal.`,
-          };
-        }
-        
-        // If opposite side, close existing position first (reversal)
-        logger.info(`Reversal signal detected: Closing ${existingPosition.side} position before opening ${side} position for ${symbol}`);
-        try {
-          await this.closePosition(symbol);
-          logger.info(`Previous position closed successfully. Opening new ${side} position...`);
-          // Wait 1 second for exchange to process
-          await this.sleep(1000);
-        } catch (error) {
-          logger.logError(`Failed to close existing position for reversal`, error, { symbol });
-          return {
-            success: false,
-            action: 'reversal_failed',
-            message: `Failed to close existing position for reversal: ${error.message}`,
-          };
+        if (!positionExistsOnExchange) {
+          // Position is tracked but doesn't exist on exchange - clean it up
+          logger.info(`Position ${symbol} is tracked but not found on exchange. Cleaning up tracker...`);
+          this.tracker.removePosition(symbol, this.exchange);
+          // Continue to open new position
+        } else {
+          // Position exists on exchange - check side
+          const existingPosition = this.tracker.getPosition(symbol, this.exchange);
+          
+          // If same side, ignore the alert
+          if (existingPosition.side === side) {
+            logger.info(`Already have ${side} position for ${symbol}, ignoring duplicate signal`);
+            return {
+              success: false,
+              action: 'skipped',
+              message: `Already have ${side} position for ${symbol}. Waiting for TP/SL or opposite signal.`,
+            };
+          }
+          
+          // If opposite side, close existing position first (reversal)
+          logger.info(`Reversal signal detected: Closing ${existingPosition.side} position before opening ${side} position for ${symbol}`);
+          try {
+            await this.closePosition(symbol);
+            logger.info(`Previous position closed successfully. Opening new ${side} position...`);
+            // Wait 1 second for exchange to process
+            await this.sleep(1000);
+          } catch (error) {
+            logger.logError(`Failed to close existing position for reversal`, error, { symbol });
+            return {
+              success: false,
+              action: 'reversal_failed',
+              message: `Failed to close existing position for reversal: ${error.message}`,
+            };
+          }
         }
       }
 
@@ -297,8 +308,8 @@ class TradeExecutor {
         unrealizedPnlUsd: 0,
         unrealizedPnlPercent: 0,
         // REQUIRED for TradeFI dashboard integration
-        assetClass: 'crypto', // Aster DEX trades crypto
-        exchange: 'aster', // Aster DEX exchange
+        assetClass: 'crypto', // Aster DEX and Lighter DEX trade crypto
+        exchange: this.exchange, // Use actual exchange name
         strategyId: strategyId, // Strategy tracking
       });
 
@@ -436,8 +447,8 @@ class TradeExecutor {
           orderId: closeResult.orderId,
           exitReason: 'MANUAL', // You can enhance this later to detect SL/TP hits
           // REQUIRED for TradeFI dashboard integration
-          assetClass: 'crypto', // Aster DEX trades crypto
-          exchange: 'aster', // Aster DEX exchange
+          assetClass: 'crypto', // Aster DEX and Lighter DEX trade crypto
+          exchange: this.exchange, // Use actual exchange name
           strategyId: strategyId, // Strategy tracking
         });
 

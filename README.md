@@ -1,30 +1,36 @@
 # Sparky Trading Bot 🚀
 
-A headless trading bot that receives TradingView webhook alerts and executes trades on Aster DEX futures with simple percentage-based stop loss and take profit.
+A headless trading bot that receives TradingView webhook alerts and executes trades on multiple exchanges (Aster DEX, Lighter DEX, OANDA, Tradier) with simple percentage-based stop loss and take profit.
 
 **Part of the Sparky Trading Ecosystem:**
-- **Sparky Bot** (this repo) - Executes trades on Aster DEX
+- **Sparky Bot** (this repo) - Executes trades on multiple exchanges
 - **TradeFI Dashboard** - Real-time analytics and monitoring (separate repo)
 
 ## System Architecture
 
 ```
-TradingView Alerts → Sparky Bot → Aster DEX (Trades)
+TradingView Alerts → Sparky Bot → Multiple Exchanges
                           ↓
                     Supabase Database
                           ↑
                   TradeFI Dashboard (Analytics)
+
+Supported Exchanges:
+- Aster DEX (Crypto Futures)
+- Lighter DEX (Crypto Perps on zkSync)
+- OANDA (Forex)
+- Tradier (Stocks/Options)
 ```
 
 ## Features
 
 ### Trading Bot (Sparky)
 - 🔔 Receives TradingView webhook alerts via HTTP
-- 📊 Executes market/limit orders on Aster DEX
+- 📊 Executes market/limit orders on multiple exchanges
 - 🛡️ **Simple percentage-based stop loss and take profit** (% of position value)
 - 📈 Position management (1 position per symbol, closes existing before opening new)
 - 💰 Fixed position sizing ($100 per trade by default)
-- 🔐 HMAC-SHA256 authentication for Aster API
+- 🔐 Multi-exchange authentication (HMAC-SHA256, API keys, etc.)
 - 🗄️ **Supabase integration** - Logs all trades and positions
 - ⚡ **Real-time position updates** - Updates prices every 30 seconds
 - 📝 Comprehensive logging with Winston
@@ -43,11 +49,38 @@ TradingView Alerts → Sparky Bot → Aster DEX (Trades)
 ## Prerequisites
 
 - Node.js v18 or higher
-- Aster DEX API credentials ([Get API key](https://www.asterdex.com/))
+- Exchange API credentials:
+  - **Aster DEX**: [Get API key](https://www.asterdex.com/)
+  - **Lighter DEX**: [Get API key](https://lighter.xyz) (zkSync)
+  - **OANDA**: [Get API key](https://www.oanda.com/)
+  - **Tradier**: [Get API key](https://tradier.com/)
 - TradingView account (for webhook alerts)
 - DigitalOcean droplet or VPS (for 24/7 deployment)
 
 ## Installation
+
+### 🆕 New: Lighter DEX Integration
+
+The bot now supports **Lighter DEX** - a decentralized perpetual exchange on zkSync with up to 100x leverage!
+
+**Quick Setup:**
+1. Get Lighter API credentials at [lighter.xyz](https://lighter.xyz)
+2. Add to your `config.json`:
+```json
+{
+  "lighter": {
+    "apiKey": "YOUR_LIGHTER_API_KEY",
+    "privateKey": "YOUR_ETH_PRIVATE_KEY",
+    "accountIndex": 0,
+    "apiKeyIndex": 2,
+    "baseUrl": "https://mainnet.zklighter.elliot.ai",
+    "tradeAmount": 500
+  }
+}
+```
+3. Trade with webhook: `{"exchange": "lighter", "symbol": "BTC-USD", "action": "BUY"}`
+
+📖 **Full Guide**: See [LIGHTER_INTEGRATION.md](LIGHTER_INTEGRATION.md)
 
 ### 1. Clone & Install Dependencies
 

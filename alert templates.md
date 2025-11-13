@@ -1,3 +1,4 @@
+/* Aster */
 {
   "secret": "Sparky_Bot_Secret_XYZ123",
   "exchange": "aster",
@@ -19,12 +20,12 @@
 }
 
 
-
+/* OANDA */ TP/SL
 {
   "secret": "Sparky_Bot_Secret_XYZ123",
   "exchange": "oanda",
   "action": "buy",
-  "symbol": "EUR_USD",
+  "symbol": "{{ticker}}",
   "stop_loss_percent": 0.5,
   "take_profit_percent": 1.5
 }
@@ -32,22 +33,34 @@
 {
   "secret": "Sparky_Bot_Secret_XYZ123",
   "exchange": "oanda",
-  "action": "buy",
-  "symbol": "EUR_USD",
-  "useTrailingStop": true,
-  "trailing_stop_pips": 20,
+  "action": "sell",
+  "symbol": "{{ticker}}",
+  "stop_loss_percent": 0.5,
   "take_profit_percent": 1.5
+}
+
+/* OANDA */ TRAILING STOP LOSS
+
+{
+  "secret": "Sparky_Bot_Secret_XYZ123",
+  "exchange": "oanda",
+  "action": "buy",
+  "symbol": "{{ticker}}",
+  "useTrailingStop": true,
+  "trailing_stop_pips": 30
 }
 
 {
   "secret": "Sparky_Bot_Secret_XYZ123",
   "exchange": "oanda",
   "action": "sell",
-  "symbol": "GBP_USD",
+  "symbol": "{{ticker}}",
   "useTrailingStop": true,
-  "trailing_stop_pips": 15,
-  "take_profit_percent": 2.0
+  "trailing_stop_pips": 30
 }
 
+
+
+/* message to use during alert setup */
 {{strategy.order.alert_message}}
 
