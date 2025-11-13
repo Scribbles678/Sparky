@@ -337,8 +337,13 @@ class OandaAPI extends BaseExchangeAPI {
    * Close position (market order with opposite side)
    */
   async closePosition(symbol, side, quantity) {
-    // In OANDA, we close by placing an opposite market order
-    const units = side.toUpperCase() === 'BUY' ? -quantity : quantity;
+    // In OANDA, to close a position:
+    // - Long position (positive units): place SELL order with NEGATIVE units
+    // - Short position (negative units): place BUY order with POSITIVE units
+    // The 'side' parameter is the opposite side needed to close
+    // If side is 'SELL' (closing a long), we need negative units
+    // If side is 'BUY' (closing a short), we need positive units
+    const units = side.toUpperCase() === 'SELL' ? -quantity : quantity;
     
     const orderData = {
       order: {
@@ -350,7 +355,7 @@ class OandaAPI extends BaseExchangeAPI {
       }
     };
     
-    logger.info('Closing OANDA position', orderData);
+    logger.info('Closing OANDA position', { symbol, side, quantity, units, orderData });
     const response = await this.makeRequest('POST', `/v3/accounts/${this.accountId}/orders`, orderData);
     
     return {
