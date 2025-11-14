@@ -22,6 +22,12 @@
     "environment": "sandbox",
     "tradeAmount": 150
   },
+
+  "tradierOptions": {
+    "accountId": "YOUR_TRADIER_ACCOUNT_ID",
+    "accessToken": "YOUR_TRADIER_ACCESS_TOKEN",
+    "environment": "sandbox"
+  },
   
   "lighter": {
     "apiKey": "YOUR_LIGHTER_API_KEY",

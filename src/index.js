@@ -7,8 +7,11 @@ const logger = require('./utils/logger');
 const AsterAPI = require('./asterApi');
 const PositionTracker = require('./positionTracker');
 const TradeExecutor = require('./tradeExecutor');
+const TradierOptionsExecutor = require('./executors/tradierOptionsExecutor');
+const TradierOptionsMonitor = require('./monitors/tradierOptionsMonitor');
 const PositionUpdater = require('./positionUpdater');
 const strategyRoutes = require('./api/strategies');
+const settingsService = require('./settings/settingsService');
 
 // ==================== Configuration ====================
 
@@ -68,10 +71,19 @@ if (Object.keys(exchanges).length === 0) {
 
 logger.info(`Configured exchanges: ${Object.keys(exchanges).join(', ')}`);
 
+settingsService.initialize({
+  exchanges: Object.keys(exchanges),
+  config,
+  intervalMs: 60_000,
+}).catch((error) => {
+  logger.warn(`Failed to initialize trade settings service: ${error.message}`);
+});
+
 // Create position tracker and executors for each exchange
 const positionTracker = new PositionTracker();
 const tradeExecutors = {};
 const positionUpdaters = {};
+const optionMonitors = {};
 
 // Create a shared StrategyManager instance for all executors
 const StrategyManager = require('./strategyManager');
@@ -79,12 +91,19 @@ const sharedStrategyManager = new StrategyManager();
 
 // Initialize executor and updater for each exchange
 for (const [exchangeName, exchangeApi] of Object.entries(exchanges)) {
-  // Pass the shared strategy manager to each executor
-  const executor = new TradeExecutor(exchangeApi, positionTracker, config);
+  const ExecutorClass = exchangeName === 'tradier_options'
+    ? TradierOptionsExecutor
+    : TradeExecutor;
+
+  const executor = new ExecutorClass(exchangeApi, positionTracker, config);
   // Replace the executor's strategy manager with the shared one
   executor.strategyManager = sharedStrategyManager;
   tradeExecutors[exchangeName] = executor;
   positionUpdaters[exchangeName] = new PositionUpdater(exchangeApi, positionTracker, config);
+
+  if (exchangeName === 'tradier_options') {
+    optionMonitors[exchangeName] = new TradierOptionsMonitor(exchangeApi, config);
+  }
   logger.info(`✅ ${exchangeName.toUpperCase()} executor initialized`);
 }
 
@@ -482,23 +501,47 @@ const server = app.listen(PORT, async () => {
   } else {
     logger.info('ℹ️  Position price updater skipped (database not configured)');
   }
+
+  Object.entries(optionMonitors).forEach(([name, monitor]) => {
+    try {
+      monitor.start();
+      logger.info(`✅ ${name.toUpperCase()} options monitor started`);
+    } catch (error) {
+      logger.warn(`⚠️  Failed to start ${name} options monitor: ${error.message}`);
+    }
+  });
 });
 
 // ==================== Graceful Shutdown ====================
 
 const shutdown = async () => {
   logger.info('Shutting down gracefully...');
-  
-  // Stop position updater
-  positionUpdater.stop();
-  
+
+  // Stop position updaters
+  Object.values(positionUpdaters).forEach((updater) => {
+    try {
+      updater.stop();
+    } catch (error) {
+      logger.warn('Failed to stop position updater', error);
+    }
+  });
+
+  // Stop options monitors
+  Object.values(optionMonitors).forEach((monitor) => {
+    try {
+      monitor.stop();
+    } catch (error) {
+      logger.warn('Failed to stop options monitor', error);
+    }
+  });
+
   server.close(() => {
     logger.info('HTTP server closed');
-    
+
     // Log final position summary
     const summary = positionTracker.getSummary();
     logger.info('Final position summary:', summary);
-    
+
     process.exit(0);
   });
 

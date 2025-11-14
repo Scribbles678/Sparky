@@ -19,6 +19,45 @@ const supabase = supabaseUrl && supabaseKey
   ? createClient(supabaseUrl, supabaseKey)
   : null;
 
+const DEFAULT_GLOBAL_SETTINGS = {
+  enabled: true,
+  trading_hours_preset: '24/5',
+  trading_window: ['00:00', '23:59'],
+  max_trades_per_day: 0,
+  max_position_size_usd: 0,
+  take_profit_percent: 0,
+  stop_loss_percent: 0,
+  allow_weekends: false,
+  news_filter: false,
+  notes: null,
+  extra_settings: {},
+};
+
+function buildDefaultExchangeSettings(exchange = 'default') {
+  return {
+    exchange,
+    enabled: true,
+    trading_hours_preset: '24/5',
+    trading_window: ['00:00', '23:59'],
+    max_trades_per_day: 0,
+    max_position_size_usd: 0,
+    take_profit_percent: 0,
+    stop_loss_percent: 0,
+    allow_weekends: false,
+    news_filter: false,
+    notes: null,
+    position_size_percent: 0,
+    strike_tolerance_percent: 1,
+    entry_limit_offset_percent: 1,
+    tp_percent: 5,
+    sl_percent: 8,
+    max_signal_age_sec: 10,
+    auto_close_outside_window: true,
+    max_open_positions: 3,
+    extra_settings: {},
+  };
+}
+
 /**
  * Log a completed trade to the database
  * @param {Object} trade - Trade data
@@ -173,6 +212,119 @@ async function savePosition(position) {
   }
 }
 
+async function saveOptionTrade(trade) {
+  if (!supabase) {
+    console.warn('Supabase not configured, skipping option trade save');
+    return { error: 'Supabase not configured' };
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('tradier_option_trades')
+      .insert([{
+        status: trade.status || 'pending_entry',
+        strategy: trade.strategy || null,
+        underlying_symbol: trade.underlyingSymbol,
+        option_symbol: trade.optionSymbol,
+        option_type: trade.optionType,
+        strike_price: trade.strikePrice,
+        expiration_date: trade.expirationDate,
+        contract_size: trade.contractSize || 100,
+        quantity_contracts: trade.quantityContracts,
+        entry_order_id: trade.entryOrderId,
+        tp_order_id: trade.tpOrderId,
+        sl_order_id: trade.slOrderId,
+        time_exit_order_id: trade.timeExitOrderId || null,
+        entry_order: trade.entryOrder || null,
+        tp_leg: trade.tpLeg || null,
+        sl_leg: trade.slLeg || null,
+        time_exit_order: trade.timeExitOrder || null,
+        entry_limit_price: trade.entryLimitPrice,
+        tp_limit_price: trade.tpLimitPrice,
+        sl_stop_price: trade.slStopPrice,
+        sl_limit_price: trade.slLimitPrice,
+        cost_usd: trade.costUsd,
+        pnl_usd: trade.pnlUsd || null,
+        pnl_percent: trade.pnlPercent || null,
+        config_snapshot: trade.configSnapshot || {},
+        extra_metadata: trade.extraMetadata || {},
+      }])
+      .select()
+      .single();
+
+    if (error) {
+      console.error('❌ Error saving option trade to Supabase:', error);
+      return { error };
+    }
+
+    return { data };
+  } catch (error) {
+    console.error('❌ Exception saving option trade:', error);
+    return { error };
+  }
+}
+
+async function updateOptionTrade(id, updates = {}) {
+  if (!supabase) {
+    console.warn('Supabase not configured, skipping option trade update');
+    return { error: 'Supabase not configured' };
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('tradier_option_trades')
+      .update({
+        ...updates,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('❌ Error updating option trade:', error);
+      return { error };
+    }
+
+    return { data };
+  } catch (error) {
+    console.error('❌ Exception updating option trade:', error);
+    return { error };
+  }
+}
+
+async function getOptionTradesByStatus(status = 'open', limit = 100) {
+  if (!supabase) {
+    return [];
+  }
+
+  try {
+    let query = supabase
+      .from('tradier_option_trades')
+      .select('*');
+
+    if (Array.isArray(status)) {
+      query = query.in('status', status);
+    } else {
+      query = query.eq('status', status);
+    }
+
+    const { data, error } = await query
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (error) {
+      console.error('❌ Error fetching option trades:', error);
+      return [];
+    }
+
+    return data || [];
+  } catch (error) {
+    console.error('❌ Exception fetching option trades:', error);
+    return [];
+  }
+}
+
 /**
  * Remove a position from the database (when closed)
  * @param {String} symbol - Symbol to remove
@@ -270,6 +422,95 @@ async function getOpenPositions() {
 }
 
 /**
+ * Fetch global trade settings (or defaults if none/config missing)
+ * @returns {Promise<Object>}
+ */
+async function getTradeSettingsGlobal() {
+  if (!supabase) {
+    return { ...DEFAULT_GLOBAL_SETTINGS };
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('trade_settings_global')
+      .select('*')
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      console.error('❌ Error fetching global trade settings:', error);
+      return { ...DEFAULT_GLOBAL_SETTINGS };
+    }
+
+    if (!data) {
+      return { ...DEFAULT_GLOBAL_SETTINGS };
+    }
+
+    return {
+      ...DEFAULT_GLOBAL_SETTINGS,
+      ...data,
+      trading_window: parseJsonArray(data.trading_window, DEFAULT_GLOBAL_SETTINGS.trading_window),
+      extra_settings: data.extra_settings || {},
+    };
+  } catch (error) {
+    console.error('❌ Exception fetching global trade settings:', error);
+    return { ...DEFAULT_GLOBAL_SETTINGS };
+  }
+}
+
+/**
+ * Fetch exchange-specific trade settings (or defaults)
+ * @param {string} exchange
+ * @returns {Promise<Object>}
+ */
+async function getExchangeTradeSettings(exchange) {
+  const defaults = buildDefaultExchangeSettings(exchange);
+
+  if (!supabase) {
+    return { ...defaults };
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('trade_settings_exchange')
+      .select('*')
+      .eq('exchange', exchange)
+      .maybeSingle();
+
+    if (error) {
+      console.error(`❌ Error fetching trade settings for ${exchange}:`, error);
+      return { ...defaults };
+    }
+
+    if (!data) {
+      return { ...defaults };
+    }
+
+    return {
+      ...defaults,
+      ...data,
+      trading_window: parseJsonArray(data.trading_window, defaults.trading_window),
+      extra_settings: data.extra_settings || {},
+    };
+  } catch (error) {
+    console.error(`❌ Exception fetching trade settings for ${exchange}:`, error);
+    return { ...defaults };
+  }
+}
+
+function parseJsonArray(value, fallback) {
+  if (!value) return fallback;
+  if (Array.isArray(value)) return value;
+  try {
+    const parsed = Array.isArray(value) ? value : JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/**
  * Test database connection
  * @returns {Promise<Boolean>} - True if connected
  */
@@ -304,6 +545,11 @@ module.exports = {
   removePosition,
   updatePositionPnL,
   getOpenPositions,
+  getTradeSettingsGlobal,
+  getExchangeTradeSettings,
+  saveOptionTrade,
+  updateOptionTrade,
+  getOptionTradesByStatus,
   testConnection
 };
 

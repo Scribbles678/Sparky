@@ -6,6 +6,7 @@
 const AsterAPI = require('../asterApi');
 const OandaAPI = require('./oandaApi');
 const TradierAPI = require('./tradierApi');
+const TradierOptionsAPI = require('./tradierOptionsApi');
 const LighterAPI = require('./lighterApi');
 const { HyperliquidAPI } = require('./hyperliquidApi');
 const logger = require('../utils/logger');
@@ -52,6 +53,16 @@ class ExchangeFactory {
           config.accessToken,
           config.environment || 'sandbox'
         );
+
+      case 'tradier_options':
+        if (!config.accountId || !config.accessToken) {
+          throw new Error('Tradier Options requires accountId and accessToken');
+        }
+        return new TradierOptionsAPI(
+          config.accountId,
+          config.accessToken,
+          config.environment || 'sandbox'
+        );
       
       case 'lighter':
         if (!config.apiKey || !config.privateKey || !config.accountIndex) {
@@ -77,7 +88,7 @@ class ExchangeFactory {
         );
       
       default:
-        throw new Error(`Unknown exchange: ${exchangeName}. Supported: aster, oanda, tradier, lighter, hyperliquid`);
+        throw new Error(`Unknown exchange: ${exchangeName}. Supported: aster, oanda, tradier, tradier_options, lighter, hyperliquid`);
     }
   }
 
@@ -118,6 +129,16 @@ class ExchangeFactory {
         logger.warn(`⚠️  Failed to initialize Tradier: ${error.message}`);
       }
     }
+
+    // Create Tradier Options instance if configured
+    if (fullConfig.tradierOptions && fullConfig.tradierOptions.accessToken) {
+      try {
+        exchanges.tradier_options = this.createExchange('tradier_options', fullConfig.tradierOptions);
+        logger.info('✅ Tradier Options API initialized');
+      } catch (error) {
+        logger.warn(`⚠️  Failed to initialize Tradier Options: ${error.message}`);
+      }
+    }
     
     // Create Lighter instance if configured
     if (fullConfig.lighter && fullConfig.lighter.apiKey) {
@@ -147,7 +168,7 @@ class ExchangeFactory {
    * @returns {array} List of supported exchange names
    */
   static getSupportedExchanges() {
-    return ['aster', 'oanda', 'tradier', 'lighter', 'hyperliquid'];
+    return ['aster', 'oanda', 'tradier', 'tradier_options', 'lighter', 'hyperliquid'];
   }
 }
 
