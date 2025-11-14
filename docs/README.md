@@ -29,14 +29,25 @@ Supported Exchanges:
 - 📊 Executes market/limit orders on multiple exchanges
 - 🛡️ **Simple percentage-based stop loss and take profit** (% of position value)
 - 📈 Position management (1 position per symbol, closes existing before opening new)
-- 💰 Fixed position sizing ($100 per trade by default)
+- 💰 Fixed dollar position sizing per exchange via `config.json`
 - 🔐 Multi-exchange authentication (HMAC-SHA256, API keys, etc.)
-- 🗄️ **Supabase integration** - Logs all trades and positions
-- ⚡ **Real-time position updates** - Updates prices every 30 seconds
+- 🗄️ **Optional Supabase integration** – Logs all trades/positions and powers the dashboard
+- 🧮 **Tradier options OTCO flow** – Executor + monitor manage entry/TP/SL legs automatically (pulls trade settings from Supabase when available)
+- ⚡ **Position price updater** – Refreshes every 30 seconds when Supabase is configured
 - 📝 Comprehensive logging with Winston
 - 🔄 Auto-restart with PM2
 - 🌐 Nginx reverse proxy support for webhooks
 - 🔒 Rate limiting on webhook endpoint
+
+## Documentation & Maintenance
+
+- [docs/EXCHANGES.md](docs/EXCHANGES.md) – exchange-specific auth, sizing, and quirks.
+- [docs/STRATEGIES.md](docs/STRATEGIES.md) – strategy metadata, trailing stops, options.
+- [docs/TRADINGVIEW.md](docs/TRADINGVIEW.md) – webhook payload expectations + troubleshooting.
+- Supabase/SQL migrations live in [`schema/`](schema/).
+
+> **Whenever you change behavior or schema, update the related markdown or SQL in this repo.**  
+> This repository is the single source of truth—no private Notion/Google Docs.
 
 ### Dashboard Integration (TradeFI)
 - 📊 Real-time P&L tracking
@@ -80,7 +91,7 @@ The bot now supports **Lighter DEX** - a decentralized perpetual exchange on zkS
 ```
 3. Trade with webhook: `{"exchange": "lighter", "symbol": "BTC-USD", "action": "BUY"}`
 
-📖 **Full Guide**: See [LIGHTER_INTEGRATION.md](LIGHTER_INTEGRATION.md)
+📖 **Full Guide**: See [docs/EXCHANGES.md](docs/EXCHANGES.md#lighter-dex-zk-rollup)
 
 ### 1. Clone & Install Dependencies
 
@@ -123,7 +134,8 @@ Edit `config.json`:
   "aster": {
     "apiUrl": "https://fapi.asterdex.com",
     "apiKey": "your_api_key",
-    "apiSecret": "your_api_secret"
+    "apiSecret": "your_api_secret",
+    "tradeAmount": 600
   },
   "riskManagement": {
     "maxPositions": 10
@@ -132,7 +144,8 @@ Edit `config.json`:
 ```
 
 **Configuration:**
-- `tradeAmount`: Fixed position size in dollars (e.g., 100 = $100 position per trade)
+- `tradeAmount`: Legacy fallback that is only surfaced in startup logs
+- `aster.tradeAmount` (and equivalent blocks for other exchanges): Fixed position size in dollars used for live orders (e.g., 600 = $600 position per trade)
 - `webhookSecret`: Secret token for TradingView webhook authentication
 - `aster`: Your Aster DEX API credentials
 - `riskManagement.maxPositions`: Maximum number of concurrent positions
@@ -164,9 +177,9 @@ SUPABASE_SERVICE_ROLE_KEY=your_service_role_key_here
 
 **Without Supabase:**
 - Bot still works and executes trades
-- No trade history logging
-- No dashboard integration
-- Trades only logged to Winston files
+- No trade history logging or dashboard integration
+- Position price updater & auto-sync services are skipped
+- Trades/events are only written to Winston log files
 
 ## Integration with TradeFI Dashboard
 
@@ -221,6 +234,18 @@ The **TradeFI Dashboard** is a separate Nuxt 3 application that provides real-ti
 - `app/pages/index.vue` - Main dashboard (Phase 1 MVP)
 - `server/api/sparky/` - Optional: Direct bot API queries
 - `nuxt.config.ts` - Supabase config
+
+### TradeFI Dashboard Expectations
+
+- **Repository:** `c:\Users\mjjoh\TradeFI\tradefi\` (Nuxt 3 + Nuxt UI frontend, nitrated server routes under `tradefi/server/api`).
+- **Supabase contract:** `tradefi/app/utils/supabase.ts` is the single source for read/write calls; it currently embeds the Supabase URL + anon key. Anytime we rotate keys or move projects, update that file (and the `.env`) so the dashboard stays in sync.
+- **Shared schema:** Dashboard queries exactly the same tables Sparky writes to (`positions`, `trades`, `trade_stats`, `trade_settings_*`, `strategies`, `tradier_option_trades`). Keep the SQL snapshots in both repos aligned; a schema drift will break dashboard auto-refreshes.
+- **Bot-facing endpoints:** TradeFI calls Sparky’s HTTP API for health/positions and strategy reloads:
+  - `GET /api/sparky/health` – piped to `server/api/sparky/health.ts` for status cards.
+  - `GET /api/sparky/positions` – used to reconcile Supabase vs. live positions.
+  - `POST /api/sparky/strategies/reload` – invoked after a strategy is toggled in the dashboard.
+- **Operator utilities:** TradeFI exposes `/api/trades/sync` and `/api/trades/fix-pnl` to backfill or repair Supabase data by pulling the latest bot logs. When the dashboard shows stale trades, run those before debugging Sparky itself.
+- **Live balances:** Dashboard balance cards (`/api/balance/*`) expect Sparky-side environment variables for Aster, OANDA, Tradier, and Tastytrade to be present so it can proxy those calls. If an exchange is disabled in config, the associated dashboard card will show “Error/Not Connected”.
 
 ### Data Flow Example
 
@@ -308,7 +333,7 @@ await removePosition(symbol)
 
 ### Setup TradeFI Dashboard
 
-See `SUPABASE_INTEGRATION.md` for complete setup guide.
+See the **Documentation & Maintenance** section above for links to the latest Supabase/schema notes.
 
 **Quick Start:**
 ```bash
@@ -361,10 +386,13 @@ It's that simple! No leverage calculations needed.
 
 ### 1. Alert Format for Opening Positions
 
-**Basic Format (supports both camelCase and snake_case):**
+> ⚠️ Always include an `exchange` field. Alerts without `exchange` are rejected with `400 Missing exchange`.
+
+**Basic Format (supports both camelCase and snake_case — `exchange` is required):**
 ```json
 {
   "secret": "your-webhook-secret",
+  "exchange": "aster",
   "symbol": "ETHUSDT",
   "action": "BUY",
   "orderType": "MARKET",
@@ -377,6 +405,7 @@ It's that simple! No leverage calculations needed.
 ```json
 {
   "secret": "your-webhook-secret",
+  "exchange": "aster",
   "symbol": "BTCUSDT",
   "action": "SELL",
   "order_type": "market",
@@ -389,6 +418,7 @@ It's that simple! No leverage calculations needed.
 ```json
 {
   "secret": "your-webhook-secret",
+  "exchange": "aster",
   "symbol": "ETHUSDT",
   "action": "BUY",
   "orderType": "LIMIT",
@@ -403,6 +433,7 @@ It's that simple! No leverage calculations needed.
 ```json
 {
   "secret": "your-webhook-secret",
+  "exchange": "aster",
   "action": "CLOSE",
   "symbol": "ETHUSDT"
 }
@@ -423,11 +454,11 @@ bearSignal = ta.crossunder(fastMA, slowMA)
 
 if bullSignal
     strategy.entry("Long", strategy.long)
-    alert('{"secret":"your-webhook-secret","symbol":"ETHUSDT","action":"BUY","orderType":"MARKET","stopLoss":2,"takeProfit":5}', alert.freq_once_per_bar)
+    alert('{"secret":"your-webhook-secret","exchange":"aster","symbol":"ETHUSDT","action":"BUY","orderType":"MARKET","stopLoss":2,"takeProfit":5}', alert.freq_once_per_bar)
 
 if bearSignal
     strategy.entry("Short", strategy.short)
-    alert('{"secret":"your-webhook-secret","symbol":"ETHUSDT","action":"SELL","orderType":"MARKET","stopLoss":2,"takeProfit":5}', alert.freq_once_per_bar)
+    alert('{"secret":"your-webhook-secret","exchange":"aster","symbol":"ETHUSDT","action":"SELL","orderType":"MARKET","stopLoss":2,"takeProfit":5}', alert.freq_once_per_bar)
 ```
 
 ### 4. Webhook URL
@@ -759,7 +790,6 @@ sparky-bot/
 ├── package.json
 ├── ecosystem.config.js       # PM2 configuration
 ├── DEPLOYMENT.md             # Detailed deployment guide
-├── QUICKSTART.md             # Quick start guide
 ├── PROJECT_STRUCTURE.md      # Project structure overview
 └── README.md                 # This file
 ```

@@ -382,10 +382,16 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
       }
     }
 
-    // Determine which exchange to use
-    const exchange = alertData.exchange ? alertData.exchange.toLowerCase() : 'aster';
-    
-    // Validate exchange
+    // Validate exchange selection
+    if (!alertData.exchange) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required field: exchange',
+      });
+    }
+
+    const exchange = alertData.exchange.toLowerCase();
+
     if (!tradeExecutors[exchange]) {
       return res.status(400).json({
         success: false,

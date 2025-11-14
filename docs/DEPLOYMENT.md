@@ -11,7 +11,7 @@
 
 1. Log in to DigitalOcean
 2. Create new Droplet:
-   - **Image**: Ubuntu 22.04 LTS
+   - **Image**: Ubuntu 24.04 LTS (repo tested on 25.04)
    - **Plan**: Basic ($6/month - 1GB RAM, 1 vCPU)
    - **Data center**: Choose closest to you
    - **Authentication**: SSH keys (recommended) or password
@@ -31,15 +31,15 @@ ssh root@YOUR_DROPLET_IP
 apt update && apt upgrade -y
 ```
 
-### Install Node.js v18
+### Install Node.js (v18 or v20 recommended)
 ```bash
-curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 apt install -y nodejs
 ```
 
 Verify installation:
 ```bash
-node --version  # Should show v18.x.x
+node --version  # Should show v20.x.x (18+ also supported)
 npm --version
 ```
 
@@ -90,11 +90,26 @@ Edit with your actual credentials:
 ```env
 NODE_ENV=production
 PORT=3000
+LOG_LEVEL=info
+
+# Supabase (required for TradeFI + settings service)
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key_here
+SUPABASE_ANON_KEY=your_anon_key_here
+
+# Webhook security
+WEBHOOK_SECRET=your_secure_random_string
+
+# Exchange keys (examples)
 ASTER_API_KEY=your_actual_api_key_here
 ASTER_API_SECRET=your_actual_api_secret_here
-ASTER_API_URL=https://api.aster.finance
-WEBHOOK_SECRET=your_secure_random_string
-LOG_LEVEL=info
+ASTER_API_URL=https://fapi.asterdex.com
+OANDA_API_KEY=your_oanda_token_here
+OANDA_ACCOUNT_ID=101-001-28692540-001
+TRADIER_TOKEN=your_tradier_token_here
+TRADIER_ACCOUNT_ID=VA55402267
+LIGHTER_API_KEY=your_lighter_api_key_here
+LIGHTER_PRIVATE_KEY=your_eth_private_key_here
 ```
 
 ### Create config file
@@ -106,22 +121,47 @@ nano config.json
 Edit trading parameters:
 ```json
 {
-  "tradeAmount": 100,
-  "leverage": {
-    "BTCUSDT": 20,
-    "ETHUSDT": 20,
-    "SOLUSDT": 10,
-    "default": 5
-  },
   "webhookSecret": "same_as_env_file",
   "aster": {
-    "apiUrl": "https://api.aster.finance",
+    "apiUrl": "https://fapi.asterdex.com",
     "apiKey": "YOUR_API_KEY",
-    "apiSecret": "YOUR_API_SECRET"
+    "apiSecret": "YOUR_API_SECRET",
+    "tradeAmount": 600
+  },
+  "oanda": {
+    "accountId": "101-001-28692540-001",
+    "accessToken": "YOUR_OANDA_TOKEN",
+    "environment": "practice",
+    "tradeAmount": 10000
+  },
+  "tradier": {
+    "accountId": "VA55402267",
+    "accessToken": "YOUR_TRADIER_TOKEN",
+    "environment": "sandbox",
+    "tradeAmount": 2000
+  },
+  "tradierOptions": {
+    "accountId": "VA55402267",
+    "accessToken": "YOUR_TRADIER_TOKEN",
+    "environment": "sandbox"
+  },
+  "hyperliquid": {
+    "apiKey": "YOUR_WALLET_ADDRESS",
+    "privateKey": "YOUR_PRIVATE_KEY",
+    "baseUrl": "https://api.hyperliquid.xyz",
+    "isTestnet": false,
+    "tradeAmount": 300
+  },
+  "lighter": {
+    "apiKey": "YOUR_LIGHTER_API_KEY",
+    "privateKey": "YOUR_ETH_PRIVATE_KEY",
+    "accountIndex": 0,
+    "apiKeyIndex": 2,
+    "baseUrl": "https://mainnet.zklighter.elliot.ai",
+    "tradeAmount": 500
   },
   "riskManagement": {
-    "maxPositions": 10,
-    "minMarginPercent": 20
+    "maxPositions": 20
   }
 }
 ```
@@ -219,15 +259,20 @@ Follow the prompts. Certbot will automatically update your Nginx config.
    - With domain + SSL: `https://your-domain.com/webhook`
    - Without domain: `http://YOUR_DROPLET_IP:3000/webhook`
 
-5. Set the message body:
+5. Set the message body (customize for your strategy):
 ```json
 {
   "secret": "your-webhook-secret",
+  "exchange": "tradier_options",
   "action": "{{strategy.order.action}}",
   "symbol": "{{ticker}}",
   "order_type": "market",
+  "strategy": "{{strategy.order.comment}}",
   "stop_loss_percent": 2.0,
   "take_profit_percent": 5.0,
+  "sizePercent": 10,
+  "right": "call",
+  "strike": 225,
   "price": {{close}}
 }
 ```

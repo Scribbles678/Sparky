@@ -3,37 +3,38 @@
 ## Overview
 ```
 sparky-trading-bot/
+├── docs/                         # Consolidated documentation
+│   ├── EXCHANGES.md              # Exchange auth/notes
+│   ├── STRATEGIES.md             # Strategy + automation notes
+│   ├── TRADINGVIEW.md            # Webhook payload guide
+│   ├── DEPLOYMENT.md             # VPS setup
+│   ├── PROJECT_STRUCTURE.md      # (this file)
+│   ├── alert templates.md        # Copy-paste alert JSON
+│   └── schema/                   # Supabase SQL migrations
+│
 ├── src/                          # Source code
-│   ├── index.js                  # Main Express server & webhook endpoint
-│   ├── asterApi.js               # Aster API client with HMAC authentication
-│   ├── tradeExecutor.js          # Trading logic & position management
-│   ├── positionTracker.js        # In-memory position tracking
-│   └── utils/
-│       ├── logger.js             # Winston logger configuration
-│       └── calculations.js       # Position size & risk calculations
+│   ├── index.js                  # Main Express server
+│   ├── tradeExecutor.js          # Generic trade executor
+│   ├── executors/tradierOptionsExecutor.js
+│   ├── monitors/tradierOptionsMonitor.js
+│   ├── exchanges/                # Aster, OANDA, Tradier, etc.
+│   ├── settings/settingsService.js
+│   ├── supabaseClient.js
+│   ├── positionTracker.js
+│   ├── positionUpdater.js
+│   └── utils/ (logger, calculations)
 │
-├── logs/                         # Log files (auto-generated)
-│   ├── combined.log              # All logs
-│   ├── error.log                 # Errors only
-│   ├── trades.log                # Trade executions
-│   └── .gitkeep                  # Git placeholder
+├── test/                         # Manual test helpers
+│   ├── testWebhook.js            # Webhook smoke tests
+│   ├── testHyperliquidIntegration.js
+│   └── testLighterIntegration.js
 │
-├── test/                         # Test scripts
-│   └── testWebhook.js            # Webhook testing utility
-│
-├── .env                          # Environment variables (NOT in git)
-├── .env.example                  # Template for .env
-├── config.json                   # Trading configuration (NOT in git)
+├── logs/                         # Runtime logs (gitignored)
+├── .env.example                  # Template for environment vars
 ├── config.json.example           # Template for config
-├── .gitignore                    # Git ignore rules
-│
-├── package.json                  # Dependencies & scripts
 ├── ecosystem.config.js           # PM2 configuration
-│
-├── README.md                     # Main documentation
-├── QUICKSTART.md                 # Quick start guide
-├── DEPLOYMENT.md                 # Deployment instructions
-└── PROJECT_STRUCTURE.md          # This file
+├── package.json / package-lock.json
+└── README.md                     # Entry point / quickstart
 ```
 
 ## Component Diagram
@@ -94,6 +95,13 @@ sparky-trading-bot/
                                └──────────────────────────────────┘
 ```
 
+### TradeFI Dashboard Linkage
+
+- **Repo:** `c:\Users\mjjoh\TradeFI\tradefi\` (Nuxt 3 + Nuxt UI). The dashboard reads/writes Supabase through `app/utils/supabase.ts`; whenever Supabase credentials change, update that file plus the `.env`.
+- **Shared schema:** TradeFI expects the same tables Sparky manages (`positions`, `trades`, `trade_stats`, `strategies`, `trade_settings_global`, `trade_settings_exchange`, `tradier_option_trades`). Regenerate the SQL snapshots in both repos whenever the schema evolves.
+- **Bot touchpoints:** TradeFI server routes proxy Sparky endpoints for health, positions, and strategy reloads (`/api/sparky/health`, `/api/sparky/positions`, `/api/sparky/strategies/reload`). Operator utilities (`/api/trades/sync`, `/api/trades/fix-pnl`) call back into Sparky/Supabase to reconcile data.
+- **Refresh cadence:** TradeFI auto-refreshes every 30 s to match Sparky’s `positionUpdater`. If Supabase credentials are absent in Sparky, the updater—and therefore the dashboard—will not show live data.
+
 ## Data Flow
 
 ### Opening a Position
@@ -115,7 +123,7 @@ Webhook Received (POST /webhook)
 [Check Available Margin] ──✗─→ Return Error
     ↓ ✓
 [Calculate Position Size]
-    tradeAmount × leverage ÷ price = quantity
+    tradeAmount ÷ price = quantity (leverage is managed directly on the exchange)
     ↓
 [Place Entry Order]
     Market or Limit order
@@ -198,11 +206,11 @@ Close Signal Received
 
 ### `src/positionTracker.js` (State Management)
 - **Purpose**: Track open positions in memory
-- **Storage**: Map<symbol, position>
+- **Storage**: Map keyed by `exchange:symbol`
 - **Key Methods**:
   - `addPosition()` - Store new position
   - `removePosition()` - Remove closed position
-  - `getPosition()` - Get by symbol
+  - `getPosition()` - Get by symbol + exchange
   - `syncWithExchange()` - Reconcile with API
 - **Use Case**: Fast lookups, prevent duplicates
 
@@ -230,24 +238,65 @@ Close Signal Received
 ```env
 NODE_ENV=production
 PORT=3000
-ASTER_API_KEY=abc123...
-ASTER_API_SECRET=xyz789...
-WEBHOOK_SECRET=secure_random_string
 LOG_LEVEL=info
+
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key_here
+SUPABASE_ANON_KEY=your_anon_key_here
+
+WEBHOOK_SECRET=your_secure_random_string
+
+ASTER_API_KEY=...
+ASTER_API_SECRET=...
+OANDA_API_KEY=...
+TRADIER_TOKEN=...
+LIGHTER_API_KEY=...
 ```
 
 ### `config.json` (Trading Parameters)
 ```json
 {
-  "tradeAmount": 100,           # Fixed $ per trade
-  "leverage": {
-    "BTCUSDT": 20,              # Symbol-specific
-    "ETHUSDT": 20,
-    "default": 5                # Fallback
+  "webhookSecret": "same_as_env_file",
+  "aster": {
+    "apiUrl": "https://fapi.asterdex.com",
+    "apiKey": "YOUR_API_KEY",
+    "apiSecret": "YOUR_API_SECRET",
+    "tradeAmount": 600
+  },
+  "oanda": {
+    "accountId": "101-001-28692540-001",
+    "accessToken": "YOUR_OANDA_TOKEN",
+    "environment": "practice",
+    "tradeAmount": 10000
+  },
+  "tradier": {
+    "accountId": "VA55402267",
+    "accessToken": "YOUR_TRADIER_TOKEN",
+    "environment": "sandbox",
+    "tradeAmount": 2000
+  },
+  "tradierOptions": {
+    "accountId": "VA55402267",
+    "accessToken": "YOUR_TRADIER_TOKEN",
+    "environment": "sandbox"
+  },
+  "hyperliquid": {
+    "apiKey": "YOUR_WALLET",
+    "privateKey": "YOUR_PRIVATE_KEY",
+    "baseUrl": "https://api.hyperliquid.xyz",
+    "isTestnet": false,
+    "tradeAmount": 300
+  },
+  "lighter": {
+    "apiKey": "YOUR_LIGHTER_API_KEY",
+    "privateKey": "YOUR_ETH_PRIVATE_KEY",
+    "accountIndex": 0,
+    "apiKeyIndex": 2,
+    "baseUrl": "https://mainnet.zklighter.elliot.ai",
+    "tradeAmount": 500
   },
   "riskManagement": {
-    "maxPositions": 10,         # Concurrent limit
-    "minMarginPercent": 20      # Safety buffer
+    "maxPositions": 20
   }
 }
 ```
