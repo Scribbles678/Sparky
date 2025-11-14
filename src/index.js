@@ -73,9 +73,17 @@ const positionTracker = new PositionTracker();
 const tradeExecutors = {};
 const positionUpdaters = {};
 
+// Create a shared StrategyManager instance for all executors
+const StrategyManager = require('./strategyManager');
+const sharedStrategyManager = new StrategyManager();
+
 // Initialize executor and updater for each exchange
 for (const [exchangeName, exchangeApi] of Object.entries(exchanges)) {
-  tradeExecutors[exchangeName] = new TradeExecutor(exchangeApi, positionTracker, config);
+  // Pass the shared strategy manager to each executor
+  const executor = new TradeExecutor(exchangeApi, positionTracker, config);
+  // Replace the executor's strategy manager with the shared one
+  executor.strategyManager = sharedStrategyManager;
+  tradeExecutors[exchangeName] = executor;
   positionUpdaters[exchangeName] = new PositionUpdater(exchangeApi, positionTracker, config);
   logger.info(`✅ ${exchangeName.toUpperCase()} executor initialized`);
 }
@@ -88,6 +96,9 @@ const positionUpdater = positionUpdaters.aster || Object.values(positionUpdaters
 // ==================== Express App Setup ====================
 
 const app = express();
+
+// Export shared strategy manager for API routes
+app.locals.strategyManager = sharedStrategyManager;
 
 // Trust proxy (needed when behind Nginx reverse proxy)
 app.set('trust proxy', true);

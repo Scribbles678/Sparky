@@ -99,6 +99,27 @@ router.post('/', async (req, res) => {
 });
 
 /**
+ * Reload strategies from database
+ * This endpoint allows external systems (like TradeFI dashboard) to trigger a strategy reload
+ * when strategy status is changed
+ */
+router.post('/reload', async (req, res) => {
+  try {
+    await strategyManager.loadStrategies();
+    res.json({
+      success: true,
+      message: 'Strategies reloaded successfully',
+      activeCount: strategyManager.strategies.size
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      success: false,
+      error: error.message 
+    });
+  }
+});
+
+/**
  * Get strategy performance over time
  */
 router.get('/:strategyName/performance', async (req, res) => {
