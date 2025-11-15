@@ -12,6 +12,10 @@ const TradierOptionsMonitor = require('./monitors/tradierOptionsMonitor');
 const PositionUpdater = require('./positionUpdater');
 const strategyRoutes = require('./api/strategies');
 const settingsService = require('./settings/settingsService');
+const {
+  testConnection,
+  getBotCredentials,
+} = require('./supabaseClient');
 
 // ==================== Configuration ====================
 
@@ -43,74 +47,84 @@ try {
   process.exit(1);
 }
 
-// Validate required configuration
-if (!config.aster.apiKey || !config.aster.apiSecret) {
-  logger.error('Missing required API credentials. Set ASTER_API_KEY and ASTER_API_SECRET');
-  process.exit(1);
-}
+config.aster = config.aster || {};
+config.oanda = config.oanda || {};
+config.tradier = config.tradier || {};
+config.tradierOptions = config.tradierOptions || config.tradier_options || {};
+config.hyperliquid = config.hyperliquid || {};
+config.lighter = config.lighter || {};
+config.riskManagement = config.riskManagement || { maxPositions: 10 };
 
-if (!config.webhookSecret && !process.env.WEBHOOK_SECRET) {
-  logger.error('Missing WEBHOOK_SECRET. This is required for security.');
-  process.exit(1);
-}
-
-const WEBHOOK_SECRET = config.webhookSecret || process.env.WEBHOOK_SECRET;
+let WEBHOOK_SECRET = config.webhookSecret || process.env.WEBHOOK_SECRET || null;
 const PORT = process.env.PORT || 3000;
+
+async function applySupabaseCredentials() {
+  try {
+    const credentials = await getBotCredentials();
+
+    if (!credentials || credentials.length === 0) {
+      logger.warn('No bot credentials found in Supabase. Using config.json values.');
+      return;
+    }
+
+    const exchangeKeyMap = {
+      aster: 'aster',
+      oanda: 'oanda',
+      tradier: 'tradier',
+      tradier_options: 'tradierOptions',
+      lighter: 'lighter',
+      hyperliquid: 'hyperliquid',
+    };
+
+    credentials.forEach((entry) => {
+      if (entry.exchange === 'webhook') {
+        if (entry.webhook_secret) {
+          config.webhookSecret = entry.webhook_secret;
+        }
+        return;
+      }
+
+      const configKey = exchangeKeyMap[entry.exchange];
+      if (!configKey) {
+        logger.warn(`Unknown credential exchange "${entry.exchange}" - skipping`);
+        return;
+      }
+
+      config[configKey] = config[configKey] || {};
+      if (entry.api_key) {
+        config[configKey].apiKey = entry.api_key;
+      }
+      if (entry.api_secret) {
+        config[configKey].apiSecret = entry.api_secret;
+      }
+      if (entry.account_id) {
+        config[configKey].accountId = entry.account_id;
+      }
+      if (entry.environment) {
+        config[configKey].environment = entry.environment;
+      }
+      if (entry.passphrase) {
+        config[configKey].passphrase = entry.passphrase;
+      }
+    });
+  } catch (error) {
+    logger.warn(`Failed to load credentials from Supabase: ${error.message}`);
+  }
+}
 
 // ==================== Initialize Components ====================
 
 const ExchangeFactory = require('./exchanges/ExchangeFactory');
-
-// Create all configured exchange API instances
-const exchanges = ExchangeFactory.createAllExchanges(config);
-
-if (Object.keys(exchanges).length === 0) {
-  logger.error('No exchanges configured! Please add at least one exchange to config.json');
-  process.exit(1);
-}
-
-logger.info(`Configured exchanges: ${Object.keys(exchanges).join(', ')}`);
-
-settingsService.initialize({
-  exchanges: Object.keys(exchanges),
-  config,
-  intervalMs: 60_000,
-}).catch((error) => {
-  logger.warn(`Failed to initialize trade settings service: ${error.message}`);
-});
-
-// Create position tracker and executors for each exchange
 const positionTracker = new PositionTracker();
+const StrategyManager = require('./strategyManager');
+const sharedStrategyManager = new StrategyManager();
 const tradeExecutors = {};
 const positionUpdaters = {};
 const optionMonitors = {};
-
-// Create a shared StrategyManager instance for all executors
-const StrategyManager = require('./strategyManager');
-const sharedStrategyManager = new StrategyManager();
-
-// Initialize executor and updater for each exchange
-for (const [exchangeName, exchangeApi] of Object.entries(exchanges)) {
-  const ExecutorClass = exchangeName === 'tradier_options'
-    ? TradierOptionsExecutor
-    : TradeExecutor;
-
-  const executor = new ExecutorClass(exchangeApi, positionTracker, config);
-  // Replace the executor's strategy manager with the shared one
-  executor.strategyManager = sharedStrategyManager;
-  tradeExecutors[exchangeName] = executor;
-  positionUpdaters[exchangeName] = new PositionUpdater(exchangeApi, positionTracker, config);
-
-  if (exchangeName === 'tradier_options') {
-    optionMonitors[exchangeName] = new TradierOptionsMonitor(exchangeApi, config);
-  }
-  logger.info(`✅ ${exchangeName.toUpperCase()} executor initialized`);
-}
-
-// For backward compatibility, also create single references (will use first exchange)
-const asterApi = exchanges.aster || Object.values(exchanges)[0];
-const tradeExecutor = tradeExecutors.aster || Object.values(tradeExecutors)[0];
-const positionUpdater = positionUpdaters.aster || Object.values(positionUpdaters)[0];
+let exchanges = {};
+let asterApi = null;
+let primaryPositionUpdater = null;
+let server;
 
 // ==================== Express App Setup ====================
 
@@ -181,6 +195,13 @@ app.use('/api/strategies', strategyRoutes);
  */
 app.get('/health', async (req, res) => {
   try {
+    if (!asterApi) {
+      return res.status(503).json({
+        status: 'starting',
+        message: 'Exchange connections are still initializing.'
+      });
+    }
+
     const uptime = process.uptime();
     const summary = positionTracker.getSummary();
     
@@ -270,6 +291,13 @@ app.post('/webhook/test', (req, res) => {
  */
 app.post('/positions/sync', async (req, res) => {
   try {
+    if (!asterApi) {
+      return res.status(503).json({
+        success: false,
+        error: 'Exchange not initialized'
+      });
+    }
+
     const summary = await positionTracker.syncWithExchange(asterApi);
     res.json({
       success: true,
@@ -458,64 +486,110 @@ app.use((err, req, res, next) => {
 
 // ==================== Server Startup ====================
 
-const server = app.listen(PORT, async () => {
-  logger.info(`🚀 Sparky Trading Bot started on port ${PORT}`);
-  logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
-  logger.info(`API URL: ${config.aster.apiUrl}`);
-  logger.info(`Position size: $${config.tradeAmount} per trade`);
-  
-  // Initialize dbConnected at function scope
-  let dbConnected = false;
-  
-  // Test API connection
-  try {
-    const balance = await asterApi.getAvailableMargin();
-    logger.info(`✅ API connection successful. Available margin: $${balance.toFixed(2)}`);
-  } catch (error) {
-    logger.error('❌ Failed to connect to Aster API', error.message);
-    logger.error('Please check your API credentials');
+async function bootstrap() {
+  await applySupabaseCredentials();
+
+  WEBHOOK_SECRET = config.webhookSecret || process.env.WEBHOOK_SECRET || WEBHOOK_SECRET;
+
+  if (!WEBHOOK_SECRET) {
+    logger.error('Missing WEBHOOK_SECRET. Configure it via TradeFI or the WEBHOOK_SECRET env variable.');
+    process.exit(1);
   }
 
-  // Test database connection
-  try {
-    const { testConnection } = require('./supabaseClient');
-    dbConnected = await testConnection();
-    if (dbConnected) {
-      logger.info('✅ Database connection successful');
-    } else {
-      logger.warn('⚠️  Database not configured. Trades will not be logged to Supabase.');
-      logger.warn('Add SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to .env to enable database logging.');
-    }
-  } catch (error) {
-    logger.warn('⚠️  Database connection failed', error.message);
-    dbConnected = false;
+  exchanges = ExchangeFactory.createAllExchanges(config);
+
+  if (Object.keys(exchanges).length === 0) {
+    logger.error('No exchanges configured! Please add at least one exchange via TradeFI.');
+    process.exit(1);
   }
 
-  // Sync positions on startup
-  try {
-    await positionTracker.syncWithExchange(asterApi);
-    logger.info('✅ Positions synced with exchange on startup');
-  } catch (error) {
-    logger.warn('⚠️  Failed to sync positions on startup', error.message);
-  }
+  logger.info(`Configured exchanges: ${Object.keys(exchanges).join(', ')}`);
 
-  // Start position price updater service
-  if (dbConnected) {
-    positionUpdater.start();
-    logger.info('✅ Position price updater started (updates every 30s)');
-    logger.info('✅ Auto-sync enabled (syncs with exchange every 5 minutes)');
-  } else {
-    logger.info('ℹ️  Position price updater skipped (database not configured)');
-  }
-
-  Object.entries(optionMonitors).forEach(([name, monitor]) => {
-    try {
-      monitor.start();
-      logger.info(`✅ ${name.toUpperCase()} options monitor started`);
-    } catch (error) {
-      logger.warn(`⚠️  Failed to start ${name} options monitor: ${error.message}`);
-    }
+  await settingsService.initialize({
+    exchanges: Object.keys(exchanges),
+    config,
+    intervalMs: 60_000,
+  }).catch((error) => {
+    logger.warn(`Failed to initialize trade settings service: ${error.message}`);
   });
+
+  for (const [exchangeName, exchangeApi] of Object.entries(exchanges)) {
+    const ExecutorClass = exchangeName === 'tradier_options'
+      ? TradierOptionsExecutor
+      : TradeExecutor;
+
+    const executor = new ExecutorClass(exchangeApi, positionTracker, config);
+    executor.strategyManager = sharedStrategyManager;
+    tradeExecutors[exchangeName] = executor;
+    positionUpdaters[exchangeName] = new PositionUpdater(exchangeApi, positionTracker, config);
+
+    if (exchangeName === 'tradier_options') {
+      optionMonitors[exchangeName] = new TradierOptionsMonitor(exchangeApi, config);
+    }
+    logger.info(`✅ ${exchangeName.toUpperCase()} executor initialized`);
+  }
+
+  asterApi = exchanges.aster || Object.values(exchanges)[0];
+  primaryPositionUpdater = positionUpdaters.aster || Object.values(positionUpdaters)[0];
+
+  server = app.listen(PORT, async () => {
+    logger.info(`🚀 Sparky Trading Bot started on port ${PORT}`);
+    logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
+    logger.info(`API URL: ${config.aster.apiUrl || 'N/A'}`);
+    logger.info(`Position size: $${config.tradeAmount || 0} per trade`);
+    
+    let dbConnected = false;
+    
+    try {
+      const balance = await asterApi.getAvailableMargin();
+      logger.info(`✅ API connection successful. Available margin: $${balance.toFixed(2)}`);
+    } catch (error) {
+      logger.error('❌ Failed to connect to Aster API', error.message);
+      logger.error('Please check your API credentials');
+    }
+
+    try {
+      dbConnected = await testConnection();
+      if (dbConnected) {
+        logger.info('✅ Database connection successful');
+      } else {
+        logger.warn('⚠️  Database not configured. Trades will not be logged to Supabase.');
+        logger.warn('Add SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to .env to enable database logging.');
+      }
+    } catch (error) {
+      logger.warn('⚠️  Database connection failed', error.message);
+      dbConnected = false;
+    }
+
+    try {
+      await positionTracker.syncWithExchange(asterApi);
+      logger.info('✅ Positions synced with exchange on startup');
+    } catch (error) {
+      logger.warn('⚠️  Failed to sync positions on startup', error.message);
+    }
+
+    if (dbConnected && primaryPositionUpdater) {
+      primaryPositionUpdater.start();
+      logger.info('✅ Position price updater started (updates every 30s)');
+      logger.info('✅ Auto-sync enabled (syncs with exchange every 5 minutes)');
+    } else {
+      logger.info('ℹ️  Position price updater skipped (database not configured)');
+    }
+
+    Object.entries(optionMonitors).forEach(([name, monitor]) => {
+      try {
+        monitor.start();
+        logger.info(`✅ ${name.toUpperCase()} options monitor started`);
+      } catch (error) {
+        logger.warn(`⚠️  Failed to start ${name} options monitor: ${error.message}`);
+      }
+    });
+  });
+}
+
+bootstrap().catch((error) => {
+  logger.logError('Failed to start Sparky bot', error);
+  process.exit(1);
 });
 
 // ==================== Graceful Shutdown ====================
@@ -541,21 +615,23 @@ const shutdown = async () => {
     }
   });
 
-  server.close(() => {
-    logger.info('HTTP server closed');
+  if (server) {
+    server.close(() => {
+      logger.info('HTTP server closed');
 
-    // Log final position summary
-    const summary = positionTracker.getSummary();
-    logger.info('Final position summary:', summary);
+      const summary = positionTracker.getSummary();
+      logger.info('Final position summary:', summary);
 
+      process.exit(0);
+    });
+
+    setTimeout(() => {
+      logger.error('Forced shutdown after timeout');
+      process.exit(1);
+    }, 30000);
+  } else {
     process.exit(0);
-  });
-
-  // Force shutdown after 30 seconds
-  setTimeout(() => {
-    logger.error('Forced shutdown after timeout');
-    process.exit(1);
-  }, 30000);
+  }
 };
 
 process.on('SIGTERM', shutdown);

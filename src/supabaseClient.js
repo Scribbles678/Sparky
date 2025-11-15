@@ -499,6 +499,33 @@ async function getExchangeTradeSettings(exchange) {
   }
 }
 
+/**
+ * Fetch stored bot credentials (API keys, webhook secret, etc.)
+ * @returns {Promise<Array>} Array of credential rows
+ */
+async function getBotCredentials() {
+  if (!supabase) {
+    console.warn('Supabase not configured, skipping credential fetch');
+    return [];
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('bot_credentials')
+      .select('*');
+
+    if (error) {
+      console.error('❌ Error fetching bot credentials:', error);
+      return [];
+    }
+
+    return data || [];
+  } catch (error) {
+    console.error('❌ Exception fetching bot credentials:', error);
+    return [];
+  }
+}
+
 function parseJsonArray(value, fallback) {
   if (!value) return fallback;
   if (Array.isArray(value)) return value;
@@ -547,6 +574,7 @@ module.exports = {
   getOpenPositions,
   getTradeSettingsGlobal,
   getExchangeTradeSettings,
+  getBotCredentials,
   saveOptionTrade,
   updateOptionTrade,
   getOptionTradesByStatus,
