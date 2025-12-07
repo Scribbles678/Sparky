@@ -15,6 +15,7 @@ const settingsService = require('./settings/settingsService');
 const {
   testConnection,
   getBotCredentials,
+  validateWebhookSecret,
 } = require('./supabaseClient');
 
 // ==================== Configuration ====================
@@ -315,6 +316,12 @@ app.post('/positions/sync', async (req, res) => {
 
 /**
  * TradingView webhook endpoint
+ * 
+ * NOTE: This endpoint now receives pre-built orders from SignalStudio.
+ * SignalStudio handles strategy configuration lookup and order building.
+ * This bot just validates and executes the order.
+ * 
+ * Still supports direct webhooks for backward compatibility.
  */
 app.post('/webhook', webhookLimiter, async (req, res) => {
   const startTime = Date.now();
@@ -328,6 +335,7 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
       contentType: req.get('content-type'),
       bodySize: JSON.stringify(alertData).length,
       isEmpty: Object.keys(alertData).length === 0,
+      source: alertData.strategy_id ? 'SignalStudio (pre-built)' : 'Direct (legacy)',
     });
 
     // Check if body is empty
@@ -344,16 +352,38 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
     }
 
     // Validate webhook secret
-    if (!alertData.secret || alertData.secret !== WEBHOOK_SECRET) {
-      logger.warn('Unauthorized webhook attempt', {
-        ip: req.ip,
-        secret: alertData.secret ? '[PROVIDED]' : '[MISSING]',
-        hasBody: Object.keys(alertData).length > 0,
-      });
-      return res.status(401).json({
-        success: false,
-        error: 'Unauthorized: Invalid webhook secret',
-        hint: alertData.secret ? 'Secret provided but incorrect' : 'Secret missing from webhook body',
+    // First try per-user validation from Supabase (preferred method)
+    let userCredential = null;
+    if (alertData.secret) {
+      try {
+        userCredential = await validateWebhookSecret(alertData.secret);
+      } catch (error) {
+        logger.warn('Error validating webhook secret from Supabase:', error);
+        // Fall through to legacy validation
+      }
+    }
+
+    // If Supabase validation failed, fall back to legacy single-secret validation
+    // This provides backward compatibility for direct webhooks
+    if (!userCredential) {
+      if (!alertData.secret || alertData.secret !== WEBHOOK_SECRET) {
+        logger.warn('Unauthorized webhook attempt', {
+          ip: req.ip,
+          secret: alertData.secret ? '[PROVIDED]' : '[MISSING]',
+          hasBody: Object.keys(alertData).length > 0,
+          validationMethod: 'legacy',
+        });
+        return res.status(401).json({
+          success: false,
+          error: 'Unauthorized: Invalid webhook secret',
+          hint: alertData.secret ? 'Secret provided but incorrect' : 'Secret missing from webhook body',
+        });
+      }
+      logger.info('Webhook validated using legacy single-secret method');
+    } else {
+      logger.info('Webhook validated using per-user secret from Supabase', {
+        userId: userCredential.userId,
+        label: userCredential.label,
       });
     }
 

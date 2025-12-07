@@ -526,6 +526,50 @@ async function getBotCredentials() {
   }
 }
 
+/**
+ * Validate webhook secret by looking it up in Supabase bot_credentials table
+ * @param {string} secret - Webhook secret to validate
+ * @returns {Promise<Object|null>} - User credential object if valid, null otherwise
+ */
+async function validateWebhookSecret(secret) {
+  if (!supabase) {
+    console.warn('Supabase not configured, cannot validate webhook secret');
+    return null;
+  }
+
+  if (!secret) {
+    return null;
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('bot_credentials')
+      .select('user_id, exchange, label, webhook_secret')
+      .eq('webhook_secret', secret)
+      .eq('exchange', 'webhook')
+      .eq('environment', 'production')
+      .maybeSingle();
+
+    if (error) {
+      console.error('❌ Error validating webhook secret:', error);
+      return null;
+    }
+
+    if (!data) {
+      return null;
+    }
+
+    return {
+      userId: data.user_id,
+      exchange: data.exchange,
+      label: data.label
+    };
+  } catch (error) {
+    console.error('❌ Exception validating webhook secret:', error);
+    return null;
+  }
+}
+
 function parseJsonArray(value, fallback) {
   if (!value) return fallback;
   if (Array.isArray(value)) return value;
@@ -575,6 +619,7 @@ module.exports = {
   getTradeSettingsGlobal,
   getExchangeTradeSettings,
   getBotCredentials,
+  validateWebhookSecret,
   saveOptionTrade,
   updateOptionTrade,
   getOptionTradesByStatus,
