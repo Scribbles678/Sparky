@@ -25,13 +25,41 @@ class TradeExecutor {
   }
 
   /**
-   * Main execution handler for webhook alerts
+   * Get asset class based on exchange
+   * Used for proper dashboard categorization
    */
-  async executeWebhook(alertData) {
+  getAssetClass() {
+    const exchangeAssetMap = {
+      'aster': 'crypto',
+      'oanda': 'forex',
+      'tradier': 'stocks',
+      'tradier_options': 'options',
+      'lighter': 'crypto',
+      'hyperliquid': 'crypto',
+      'tastytrade': 'futures',
+    };
+    return exchangeAssetMap[this.exchange] || 'crypto';
+  }
+
+  /**
+   * Main execution handler for webhook alerts
+   * @param {Object} alertData - Alert/order data from webhook
+   * @param {String} userId - User ID from SignalStudio (for multi-tenant support)
+   */
+  async executeWebhook(alertData, userId = null) {
     try {
       const { action, symbol, strategy } = alertData;
 
+      // Store userId in alertData for downstream use
+      alertData.userId = userId || alertData.userId || alertData.user_id;
+
       logger.logWebhook(alertData);
+
+      if (alertData.userId) {
+        logger.info(`🔐 Processing trade for user: ${alertData.userId}`);
+      } else {
+        logger.warn('⚠️ No userId provided - trade may not be visible in dashboard!');
+      }
 
       // Validate strategy if provided
       if (strategy) {
@@ -48,7 +76,7 @@ class TradeExecutor {
 
       // Route to appropriate handler
       if (action.toLowerCase() === 'close') {
-        return await this.closePosition(symbol, strategy);
+        return await this.closePosition(symbol, strategy, alertData.userId);
       } else if (['buy', 'sell'].includes(action.toLowerCase())) {
         return await this.openPosition(alertData);
       } else {
@@ -296,14 +324,16 @@ class TradeExecutor {
       const stopPrice = finalStopLoss ? calculateStopLoss(side, entryPrice, finalStopLoss) : null;
       const tpPrice = finalTakeProfit ? calculateTakeProfit(side, entryPrice, finalTakeProfit) : null;
       
-      // Get strategy ID if strategy is provided
-      let strategyId = null;
-      if (alertData.strategy) {
+      // Get strategy ID if strategy is provided (from alertData or lookup)
+      let strategyId = alertData.strategy_id || null;
+      if (!strategyId && alertData.strategy) {
         const strategyInfo = this.strategyManager.getStrategy(alertData.strategy);
         strategyId = strategyInfo?.id || null;
       }
 
       await savePosition({
+        // MULTI-TENANT: user_id is REQUIRED for dashboard visibility
+        userId: alertData.userId,
         symbol,
         side,
         entryPrice,
@@ -320,10 +350,10 @@ class TradeExecutor {
         currentPrice: entryPrice,
         unrealizedPnlUsd: 0,
         unrealizedPnlPercent: 0,
-        // REQUIRED for TradeFI dashboard integration
-        assetClass: 'crypto', // Aster DEX and Lighter DEX trade crypto
-        exchange: this.exchange, // Use actual exchange name
-        strategyId: strategyId, // Strategy tracking
+        // REQUIRED for SignalStudio dashboard integration
+        assetClass: this.getAssetClass(), // Dynamic based on exchange
+        exchange: this.exchange,
+        strategyId: strategyId,
       });
 
       logger.info(`Position opened successfully for ${symbol}`);
@@ -341,9 +371,12 @@ class TradeExecutor {
 
   /**
    * Close an existing position
+   * @param {String} symbol - Trading symbol
+   * @param {String} strategy - Strategy name (optional)
+   * @param {String} userId - User ID for multi-tenant support
    */
-  async closePosition(symbol, strategy = null) {
-    logger.info(`Closing position for ${symbol}`);
+  async closePosition(symbol, strategy = null, userId = null) {
+    logger.info(`Closing position for ${symbol}${userId ? ` (user: ${userId})` : ''}`);
 
     try {
       // Check if we're tracking this position
@@ -443,6 +476,8 @@ class TradeExecutor {
         }
 
         await logTrade({
+          // MULTI-TENANT: user_id is REQUIRED for dashboard visibility
+          userId: userId,
           symbol,
           side: positionSide,
           entryPrice: trackedPosition.entryPrice || entryPrice,
@@ -459,10 +494,10 @@ class TradeExecutor {
           pnlPercent,
           orderId: closeResult.orderId,
           exitReason: 'MANUAL', // You can enhance this later to detect SL/TP hits
-          // REQUIRED for TradeFI dashboard integration
-          assetClass: 'crypto', // Aster DEX and Lighter DEX trade crypto
-          exchange: this.exchange, // Use actual exchange name
-          strategyId: strategyId, // Strategy tracking
+          // REQUIRED for SignalStudio dashboard integration
+          assetClass: this.getAssetClass(), // Dynamic based on exchange
+          exchange: this.exchange,
+          strategyId: strategyId,
         });
 
         // Update strategy performance metrics
@@ -476,8 +511,8 @@ class TradeExecutor {
         }
       }
 
-      // Remove position from database
-      await removePosition(symbol);
+      // Remove position from database (with userId for multi-tenant safety)
+      await removePosition(symbol, userId);
       
       // Remove from tracker
       this.tracker.removePosition(symbol, this.exchange);

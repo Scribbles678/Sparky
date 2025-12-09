@@ -2,42 +2,51 @@
 
 A headless trading bot that receives TradingView webhook alerts and executes trades on multiple exchanges (Aster DEX, Lighter DEX, OANDA, Tradier) with simple percentage-based stop loss and take profit.
 
-**Part of the Sparky Trading Ecosystem:**
-- **Sparky Bot** (this repo) - Executes trades on multiple exchanges
-- **TradeFI Dashboard** - Real-time analytics and monitoring (separate repo)
+**Part of the SignalStudio Trading Ecosystem:**
+- **SignalStudio Dashboard** - Real-time analytics, strategy management, and webhook processing (`app.signal-studio.co`)
+- **Sparky Bot** (this repo) - Executes trades on multiple exchanges (VPS/DigitalOcean)
 
 ## System Architecture
 
 ```
-TradingView Alerts → Sparky Bot → Multiple Exchanges
-                          ↓
-                    Supabase Database
-                          ↑
-                  TradeFI Dashboard (Analytics)
+TradingView Alerts → SignalStudio (/api/webhook) → Sparky Bot → Multiple Exchanges
+                          ↓                              ↓
+                    Redis Cache (Phase 2)          Supabase Database
+                          ↓                              ↑
+                    Supabase Database          SignalStudio Dashboard (Analytics)
 
 Supported Exchanges:
 - Aster DEX (Crypto Futures)
 - Lighter DEX (Crypto Perps on zkSync)
 - OANDA (Forex)
 - Tradier (Stocks/Options)
+- Tasty Trade (Futures)
 ```
+
+**Key Changes:**
+- TradingView now sends alerts to **SignalStudio** (`https://app.signal-studio.co/api/webhook`)
+- SignalStudio builds complete orders from strategy configurations
+- SignalStudio forwards pre-built orders to Sparky Bot **asynchronously**
+- Sparky Bot validates webhook secrets per-user from Supabase (with in-memory cache)
 
 ## Features
 
 ### Trading Bot (Sparky)
-- 🔔 Receives TradingView webhook alerts via HTTP
+- 🔔 Receives **pre-built orders** from SignalStudio (async forwarding)
 - 📊 Executes market/limit orders on multiple exchanges
 - 🛡️ **Simple percentage-based stop loss and take profit** (% of position value)
 - 📈 Position management (1 position per symbol, closes existing before opening new)
-- 💰 Fixed dollar position sizing per exchange via `config.json`
+- 💰 Position sizing from SignalStudio orders (falls back to `config.json` for direct webhooks)
 - 🔐 Multi-exchange authentication (HMAC-SHA256, API keys, etc.)
-- 🗄️ **Optional Supabase integration** – Logs all trades/positions and powers the dashboard
+- 🔐 **Per-user webhook secret validation** from Supabase (with in-memory cache - 30s refresh)
+- 🗄️ **Supabase integration** – Logs all trades/positions and powers the dashboard
 - 🧮 **Tradier options OTCO flow** – Executor + monitor manage entry/TP/SL legs automatically (pulls trade settings from Supabase when available)
 - ⚡ **Position price updater** – Refreshes every 30 seconds when Supabase is configured
 - 📝 Comprehensive logging with Winston
 - 🔄 Auto-restart with PM2
 - 🌐 Nginx reverse proxy support for webhooks
-- 🔒 Rate limiting on webhook endpoint
+- 🔒 Rate limiting on webhook endpoint (per-user when using Supabase validation)
+- ⚡ **Connection pooling** – Reuses HTTP connections for faster processing
 
 ## Documentation & Maintenance
 
@@ -49,13 +58,15 @@ Supported Exchanges:
 > **Whenever you change behavior or schema, update the related markdown or SQL in this repo.**  
 > This repository is the single source of truth—no private Notion/Google Docs.
 
-### Dashboard Integration (TradeFI)
+### Dashboard Integration (SignalStudio)
 - 📊 Real-time P&L tracking
 - 📈 Win rate analytics
 - 📉 Cumulative P&L charts
 - 🔴 Live position monitoring
 - 📜 Trade history
 - ⏱️ Auto-refresh every 30 seconds
+- 🎯 Strategy management and order configuration
+- 🔔 Webhook activity monitoring
 
 ## Prerequisites
 
@@ -157,7 +168,7 @@ Edit `config.json`:
 Add these to your `.env` file for database logging and dashboard integration:
 
 ```env
-# Supabase Database (for trade logging & TradeFI dashboard)
+# Supabase Database (for trade logging & SignalStudio dashboard)
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=your_service_role_key_here
 ```
@@ -165,8 +176,10 @@ SUPABASE_SERVICE_ROLE_KEY=your_service_role_key_here
 **Why Supabase?**
 - Logs all trades with entry/exit prices and P&L
 - Tracks open positions in real-time
-- Powers the TradeFI analytics dashboard
+- Powers the SignalStudio analytics dashboard
 - Enables performance tracking and analysis
+- Stores per-user webhook secrets for validation
+- Stores strategy configurations and order configs
 
 **Get Supabase Credentials:**
 1. Go to https://app.supabase.com
@@ -181,26 +194,49 @@ SUPABASE_SERVICE_ROLE_KEY=your_service_role_key_here
 - Position price updater & auto-sync services are skipped
 - Trades/events are only written to Winston log files
 
-## Integration with TradeFI Dashboard
+## Integration with SignalStudio Dashboard
 
 ### Overview
-The **TradeFI Dashboard** is a separate Nuxt 3 application that provides real-time analytics for Sparky bot trades.
+The **SignalStudio Dashboard** is a separate Nuxt 3 application that provides real-time analytics, strategy management, and webhook processing for Sparky bot trades.
 
-**Repository:** `c:\Users\mjjoh\TradeFI\tradefi\`
+**Repository:** `c:\Users\mjjoh\SignalStudio\signal\`  
+**Domain:** `https://app.signal-studio.co`
 
 ### How They Work Together
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                     Sparky Trading Bot (VPS)                    │
+│                    TradingView Platform                          │
+│              (User's Trading Strategies)                         │
+└───────────────────────┬─────────────────────────────────────────┘
+                        │ Webhook Alerts
+                        │ POST /api/webhook
+                        ▼
+┌─────────────────────────────────────────────────────────────────┐
+│            SignalStudio Dashboard (Netlify)                      │
+│            Domain: app.signal-studio.co                           │
 │                                                                 │
 │  1. Receives TradingView webhook                                │
-│  2. Executes trade on Aster DEX                                 │
-│  3. Saves position to Supabase (positions table)                │
-│  4. Updates prices every 30s (positionUpdater.js)               │
-│  5. On close: logs to Supabase (trades table)                   │
-└─────────────────────────────────────────────────────────────────┘
-                            ↓ writes to
+│  2. Validates webhook secret (Redis cached)                     │
+│  3. Builds order from strategy config (Redis cached)            │
+│  4. Forwards to Sparky Bot asynchronously                       │
+│  5. Responds to TradingView immediately (< 1 second)           │
+└───────────────────────┬─────────────────────────────────────────┘
+                        │ Async Forwarding
+                        │ POST /webhook (fire-and-forget)
+                        ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                     Sparky Trading Bot (VPS)                    │
+│                                                                 │
+│  1. Receives pre-built order from SignalStudio                  │
+│  2. Validates webhook secret (per-user from Supabase)          │
+│  3. Executes trade on exchange                                 │
+│  4. Saves position to Supabase (positions table)                │
+│  5. Updates prices every 30s (positionUpdater.js)              │
+│  6. On close: logs to Supabase (trades table)                   │
+└───────────────────────┬─────────────────────────────────────────┘
+                        │ writes to
+                        ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Supabase Database (Cloud)                    │
 │                                                                 │
@@ -208,16 +244,20 @@ The **TradeFI Dashboard** is a separate Nuxt 3 application that provides real-ti
 │  - positions (open positions, updated every 30s)                │
 │  - trades (completed trades with P&L)                           │
 │  - trade_stats (aggregate statistics view)                      │
-└─────────────────────────────────────────────────────────────────┘
-                            ↑ reads from
+│  - webhook_requests (webhook activity logs)                     │
+│  - bot_credentials (per-user webhook secrets)                   │
+└───────────────────────┬─────────────────────────────────────────┘
+                        │ reads from
+                        ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                TradeFI Dashboard (Local/Deployed)                │
+│            SignalStudio Dashboard (Netlify)                      │
 │                                                                 │
 │  1. Reads from Supabase (read-only, anon key)                   │
 │  2. Displays real-time positions & P&L                          │
 │  3. Shows cumulative P&L charts                                 │
 │  4. Auto-refreshes every 30 seconds                             │
-│  5. Tracks win rate, trades today, etc.                         │
+│  5. Tracks win rate, trades today, etc.                        │
+│  6. Shows webhook activity logs                                │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -229,23 +269,26 @@ The **TradeFI Dashboard** is a separate Nuxt 3 application that provides real-ti
 - `src/tradeExecutor.js` - Calls savePosition() and logTrade()
 - `src/index.js` - Initializes position updater on startup
 
-**TradeFI Dashboard:**
+**SignalStudio Dashboard:**
 - `app/utils/supabase.ts` - Read-only database client
-- `app/pages/index.vue` - Main dashboard (Phase 1 MVP)
-- `server/api/sparky/` - Optional: Direct bot API queries
-- `nuxt.config.ts` - Supabase config
+- `app/pages/index.vue` - Main dashboard
+- `server/api/webhook/index.ts` - Webhook handler (receives TradingView alerts)
+- `server/services/orderBuilder.ts` - Builds orders from strategy configs
+- `server/utils/redis.ts` - Redis caching for performance
+- `nuxt.config.ts` - Supabase and Redis config
 
-### TradeFI Dashboard Expectations
+### SignalStudio Dashboard Expectations
 
-- **Repository:** `c:\Users\mjjoh\TradeFI\tradefi\` (Nuxt 3 + Nuxt UI frontend, nitrated server routes under `tradefi/server/api`).
-- **Supabase contract:** `tradefi/app/utils/supabase.ts` is the single source for read/write calls; it currently embeds the Supabase URL + anon key. Anytime we rotate keys or move projects, update that file (and the `.env`) so the dashboard stays in sync.
-- **Shared schema:** Dashboard queries exactly the same tables Sparky writes to (`positions`, `trades`, `trade_stats`, `trade_settings_*`, `strategies`, `tradier_option_trades`). Keep the SQL snapshots in both repos aligned; a schema drift will break dashboard auto-refreshes.
-- **Bot-facing endpoints:** TradeFI calls Sparky’s HTTP API for health/positions and strategy reloads:
-  - `GET /api/sparky/health` – piped to `server/api/sparky/health.ts` for status cards.
-  - `GET /api/sparky/positions` – used to reconcile Supabase vs. live positions.
-  - `POST /api/sparky/strategies/reload` – invoked after a strategy is toggled in the dashboard.
-- **Operator utilities:** TradeFI exposes `/api/trades/sync` and `/api/trades/fix-pnl` to backfill or repair Supabase data by pulling the latest bot logs. When the dashboard shows stale trades, run those before debugging Sparky itself.
-- **Live balances:** Dashboard balance cards (`/api/balance/*`) expect Sparky-side environment variables for Aster, OANDA, Tradier, and Tastytrade to be present so it can proxy those calls. If an exchange is disabled in config, the associated dashboard card will show “Error/Not Connected”.
+- **Repository:** `c:\Users\mjjoh\SignalStudio\signal\` (Nuxt 3 + ShadCN UI frontend, Nitro server routes under `signal/server/api`).
+- **Domain:** `https://app.signal-studio.co` (deployed on Netlify)
+- **Supabase contract:** `signal/app/utils/supabase.ts` is the single source for read/write calls. Anytime we rotate keys or move projects, update that file (and the `.env`) so the dashboard stays in sync.
+- **Shared schema:** Dashboard queries exactly the same tables Sparky writes to (`positions`, `trades`, `trade_stats`, `trade_settings_exchange`, `strategies`, `tradier_option_trades`, `webhook_requests`, `bot_credentials`). Keep the SQL snapshots in both repos aligned; a schema drift will break dashboard auto-refreshes.
+- **Webhook processing:** SignalStudio receives TradingView webhooks at `/api/webhook`, builds orders from strategy configurations, and forwards to Sparky Bot asynchronously.
+- **Redis caching:** SignalStudio uses Redis to cache credentials, subscriptions, strategies, and exchange settings for faster webhook processing.
+- **Bot-facing endpoints:** SignalStudio can call Sparky's HTTP API for health/positions:
+  - `GET /api/sparky/health` – for status cards (optional)
+  - `GET /api/sparky/positions` – used to reconcile Supabase vs. live positions (optional)
+- **Live balances:** Dashboard balance cards (`/api/balance/*`) expect Sparky-side environment variables for Aster, OANDA, Tradier, and Tastytrade to be present so it can proxy those calls. If an exchange is disabled in config, the associated dashboard card will show "Error/Not Connected".
 
 ### Data Flow Example
 
@@ -331,14 +374,14 @@ await removePosition(symbol)
 - `is_winner` - Boolean
 - `exit_reason` - STOP_LOSS, TAKE_PROFIT, or MANUAL
 
-### Setup TradeFI Dashboard
+### Setup SignalStudio Dashboard
 
 See the **Documentation & Maintenance** section above for links to the latest Supabase/schema notes.
 
 **Quick Start:**
 ```bash
 # Navigate to dashboard
-cd c:\Users\mjjoh\TradeFI\tradefi
+cd c:\Users\mjjoh\SignalStudio\signal
 
 # Install dependencies
 npm install
@@ -346,11 +389,12 @@ npm install
 # Add .env file with Supabase credentials
 # SUPABASE_URL=...
 # SUPABASE_ANON_KEY=... (use anon key, NOT service role)
+# REDIS_URL=... (optional but recommended for performance)
 
 # Run dashboard
 npm run dev
 
-# Open http://localhost:3001
+# Open http://localhost:3000
 ```
 
 ## Usage
@@ -374,21 +418,48 @@ pm2 startup
 
 ## TradingView Webhook Setup
 
+### ⚠️ Important: Webhook URL Change
+
+**TradingView alerts now go to SignalStudio, not directly to Sparky Bot.**
+
+**Webhook URL:** `https://app.signal-studio.co/api/webhook`
+
+SignalStudio will:
+1. Validate your webhook secret
+2. Build the complete order from your strategy configuration
+3. Forward the order to Sparky Bot asynchronously
+4. Respond to TradingView immediately (< 1 second)
+
 ### Understanding Simple TP/SL 💡
 
 **The `stopLoss` and `takeProfit` values are simple price movement percentages.**
 
-With a $100 position (your `tradeAmount`):
+With a $100 position:
 - `"stopLoss": 2` → 2% price move against you = **$2 loss**
 - `"takeProfit": 5` → 5% price move in your favor = **$5 profit**
 
 It's that simple! No leverage calculations needed.
 
-### 1. Alert Format for Opening Positions
+### 1. Simple Alert Format (Recommended)
 
-> ⚠️ Always include an `exchange` field. Alerts without `exchange` are rejected with `400 Missing exchange`.
+**If you have a strategy configured in SignalStudio:**
+```json
+{
+  "secret": "your-webhook-secret",
+  "strategy": "My Strategy Name",
+  "action": "BUY",
+  "symbol": "ETHUSDT"
+}
+```
 
-**Basic Format (supports both camelCase and snake_case — `exchange` is required):**
+SignalStudio will automatically:
+- Look up your strategy configuration
+- Build the complete order (position size, TP/SL, order type)
+- Forward to Sparky Bot
+
+### 2. Full Alert Format (Still Supported)
+
+**For direct webhooks or alert overrides:**
 ```json
 {
   "secret": "your-webhook-secret",
@@ -463,15 +534,16 @@ if bearSignal
 
 ### 4. Webhook URL
 
-Point your TradingView alerts to:
+**Point your TradingView alerts to SignalStudio:**
 ```
-http://your-droplet-ip/webhook
+https://app.signal-studio.co/api/webhook
 ```
 
-Or with Nginx reverse proxy (recommended):
-```
-http://your-domain.com/webhook
-```
+**Note:** Sparky Bot still supports direct webhooks for backward compatibility, but the recommended flow is through SignalStudio for:
+- Strategy-based order configuration
+- Centralized rate limiting
+- Order building from saved configurations
+- Better performance with Redis caching
 
 ## API Endpoints
 
@@ -494,6 +566,12 @@ http://your-domain.com/webhook
 ## Position Sizing & TP/SL Calculation
 
 ### Position Size Formula
+
+**When receiving orders from SignalStudio:**
+- Position size comes from `position_size_usd` in the pre-built order
+- SignalStudio calculates this from your strategy configuration
+
+**For direct webhooks (backward compatibility):**
 ```javascript
 // Example: $100 position, ETH at $4,000
 const quantity = $100 / $4,000 = 0.025 ETH (rounded to 0.025 for precision)

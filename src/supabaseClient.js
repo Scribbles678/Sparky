@@ -69,14 +69,25 @@ async function logTrade(trade) {
     return { error: 'Supabase not configured' };
   }
 
+  // CRITICAL: user_id is required for multi-tenant data isolation
+  if (!trade.userId) {
+    console.error('❌ CRITICAL: user_id is required for trade logging! Trade will not be visible to user.');
+  }
+
   try {
     const tradeData = {
+      // MULTI-TENANT: user_id is REQUIRED for RLS policies
+      user_id: trade.userId || null,
+      
       symbol: trade.symbol,
       side: trade.side,
       
-      // Asset Classification (REQUIRED for TradeFI dashboard)
-      asset_class: trade.assetClass || 'crypto', // Default to crypto for Aster DEX and Lighter DEX
-      exchange: trade.exchange || 'aster', // Default to aster for Aster DEX
+      // Asset Classification (REQUIRED for SignalStudio dashboard)
+      asset_class: trade.assetClass || 'crypto',
+      exchange: trade.exchange || 'aster',
+      
+      // Strategy tracking
+      strategy_id: trade.strategyId || null,
       
       // Entry
       entry_price: trade.entryPrice,
@@ -138,13 +149,20 @@ async function savePosition(position) {
     return { error: 'Supabase not configured' };
   }
 
+  // CRITICAL: user_id is required for multi-tenant data isolation
+  if (!position.userId) {
+    console.error('❌ CRITICAL: user_id is required for position saving! Position will not be visible to user.');
+  }
+
   try {
     // Check if position already exists to preserve entry_time
+    // MULTI-TENANT: Filter by user_id AND symbol
     let existingEntryTime = null;
-    if (position.preserveEntryTime !== false) { // Default to preserving entry_time
+    if (position.preserveEntryTime !== false && position.userId) {
       const { data: existing } = await supabase
         .from('positions')
         .select('entry_time')
+        .eq('user_id', position.userId)
         .eq('symbol', position.symbol)
         .single();
       
@@ -154,12 +172,18 @@ async function savePosition(position) {
     }
     
     const positionData = {
+      // MULTI-TENANT: user_id is REQUIRED for RLS policies
+      user_id: position.userId || null,
+      
       symbol: position.symbol,
       side: position.side,
       
-      // Asset Classification (REQUIRED for TradeFI dashboard)
-      asset_class: position.assetClass || 'crypto', // Default to crypto for Aster DEX and Lighter DEX
-      exchange: position.exchange || 'aster', // Default to aster for Aster DEX
+      // Asset Classification (REQUIRED for SignalStudio dashboard)
+      asset_class: position.assetClass || 'crypto',
+      exchange: position.exchange || 'aster',
+      
+      // Strategy tracking
+      strategy_id: position.strategyId || null,
       
       // Entry
       entry_price: position.entryPrice,
@@ -194,9 +218,12 @@ async function savePosition(position) {
     };
 
     // Use upsert to insert or update if exists
+    // MULTI-TENANT: Conflict on user_id + symbol (requires positions_user_symbol_unique constraint)
+    // Note: If migration hasn't been run yet, this will fail - run positions_multiuser_migration.sql
+    const conflictColumns = position.userId ? 'user_id,symbol' : 'symbol';
     const { data, error } = await supabase
       .from('positions')
-      .upsert([positionData], { onConflict: 'symbol' })
+      .upsert([positionData], { onConflict: conflictColumns })
       .select();
 
     if (error) {
@@ -328,27 +355,39 @@ async function getOptionTradesByStatus(status = 'open', limit = 100) {
 /**
  * Remove a position from the database (when closed)
  * @param {String} symbol - Symbol to remove
+ * @param {String} userId - User ID (required for multi-tenant)
  * @returns {Promise<Object>} - Result from Supabase
  */
-async function removePosition(symbol) {
+async function removePosition(symbol, userId = null) {
   if (!supabase) {
     console.warn('Supabase not configured, skipping position removal');
     return { error: 'Supabase not configured' };
   }
 
+  // CRITICAL: user_id should be provided for multi-tenant safety
+  if (!userId) {
+    console.warn('⚠️ removePosition called without userId - may remove wrong user\'s position!');
+  }
+
   try {
-    const { data, error } = await supabase
+    let query = supabase
       .from('positions')
       .delete()
-      .eq('symbol', symbol)
-      .select();
+      .eq('symbol', symbol);
+    
+    // MULTI-TENANT: Filter by user_id if provided
+    if (userId) {
+      query = query.eq('user_id', userId);
+    }
+    
+    const { data, error } = await query.select();
 
     if (error) {
       console.error('❌ Error removing position from Supabase:', error);
       return { error };
     }
 
-    console.log('✅ Position removed from database:', symbol);
+    console.log('✅ Position removed from database:', symbol, userId ? `(user: ${userId})` : '');
     return { data };
   } catch (error) {
     console.error('❌ Exception removing position:', error);
@@ -527,17 +566,103 @@ async function getBotCredentials() {
 }
 
 /**
- * Validate webhook secret by looking it up in Supabase bot_credentials table
- * @param {string} secret - Webhook secret to validate
- * @returns {Promise<Object|null>} - User credential object if valid, null otherwise
+ * In-memory cache for webhook credentials
+ * Maps webhook_secret -> { userId, exchange, label }
  */
-async function validateWebhookSecret(secret) {
+let credentialsCache = new Map();
+let cacheInitialized = false;
+let lastCacheRefresh = null;
+
+/**
+ * Initialize credential cache by loading all webhook credentials from Supabase
+ * @returns {Promise<void>}
+ */
+async function initializeCredentialCache() {
   if (!supabase) {
-    console.warn('Supabase not configured, cannot validate webhook secret');
+    console.warn('Supabase not configured, cannot initialize credential cache');
+    return;
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('bot_credentials')
+      .select('user_id, exchange, label, webhook_secret')
+      .eq('exchange', 'webhook')
+      .eq('environment', 'production');
+
+    if (error) {
+      console.error('❌ Error loading credentials for cache:', error);
+      return;
+    }
+
+    // Clear existing cache
+    credentialsCache.clear();
+
+    // Populate cache
+    if (data && data.length > 0) {
+      data.forEach(cred => {
+        if (cred.webhook_secret) {
+          credentialsCache.set(cred.webhook_secret, {
+            userId: cred.user_id,
+            exchange: cred.exchange,
+            label: cred.label
+          });
+        }
+      });
+      console.log(`✅ Credential cache initialized with ${credentialsCache.size} webhook secrets`);
+    } else {
+      console.log('⚠️  No webhook credentials found in database');
+    }
+
+    cacheInitialized = true;
+    lastCacheRefresh = new Date();
+  } catch (error) {
+    console.error('❌ Exception initializing credential cache:', error);
+  }
+}
+
+/**
+ * Refresh credential cache by reloading from Supabase
+ * @returns {Promise<void>}
+ */
+async function refreshCredentialCache() {
+  await initializeCredentialCache();
+}
+
+/**
+ * Validate webhook secret by looking it up in cache (fast) or Supabase (fallback)
+ * @param {string} secret - Webhook secret to validate
+ * @param {boolean} forceDbQuery - If true, always query Supabase (bypass cache)
+ * @returns {Object|null|Promise<Object|null>} - User credential object if valid, null otherwise
+ */
+function validateWebhookSecret(secret, forceDbQuery = false) {
+  if (!secret) {
     return null;
   }
 
-  if (!secret) {
+  // If cache not initialized or force DB query, query Supabase
+  if (!cacheInitialized || forceDbQuery) {
+    return validateWebhookSecretFromDb(secret);
+  }
+
+  // Try cache first (fast, no DB query)
+  const cached = credentialsCache.get(secret);
+  if (cached) {
+    return cached;
+  }
+
+  // Not in cache, return null (caller can fall back to DB query if needed)
+  return null;
+}
+
+/**
+ * Validate webhook secret by querying Supabase directly (fallback)
+ * @param {string} secret - Webhook secret to validate
+ * @returns {Promise<Object|null>} - User credential object if valid, null otherwise
+ */
+async function validateWebhookSecretFromDb(secret) {
+  if (!supabase) {
+    console.warn('Supabase not configured, cannot validate webhook secret');
     return null;
   }
 
@@ -558,6 +683,13 @@ async function validateWebhookSecret(secret) {
     if (!data) {
       return null;
     }
+
+    // Add to cache for future use
+    credentialsCache.set(secret, {
+      userId: data.user_id,
+      exchange: data.exchange,
+      label: data.label
+    });
 
     return {
       userId: data.user_id,
@@ -620,6 +752,9 @@ module.exports = {
   getExchangeTradeSettings,
   getBotCredentials,
   validateWebhookSecret,
+  validateWebhookSecretFromDb,
+  initializeCredentialCache,
+  refreshCredentialCache,
   saveOptionTrade,
   updateOptionTrade,
   getOptionTradesByStatus,

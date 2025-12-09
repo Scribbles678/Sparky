@@ -95,7 +95,7 @@ sparky-trading-bot/
                                └──────────────────────────────────┘
 ```
 
-### TradeFI Dashboard Linkage
+### SignalStudio Dashboard Linkage
 
 - **Repo:** `c:\Users\mjjoh\TradeFI\tradefi\` (Nuxt 3 + Nuxt UI). The dashboard reads/writes Supabase through `app/utils/supabase.ts`; whenever Supabase credentials change, update that file plus the `.env`.
 - **Shared schema:** TradeFI expects the same tables Sparky manages (`positions`, `trades`, `trade_stats`, `strategies`, `trade_settings_global`, `trade_settings_exchange`, `tradier_option_trades`). Regenerate the SQL snapshots in both repos whenever the schema evolves.

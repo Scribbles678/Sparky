@@ -8,7 +8,7 @@ This doc replaces the old per-exchange markdown files. Update this file whenever
 - Notes:
   - Supports USDT-margined perpetuals.
   - Position size defaults to `tradeAmount` in `config.json` unless overridden in Supabase trade settings.
-  - Uses position tracker + Supabase logging for TradeFI dashboards.
+  - Uses position tracker + Supabase logging for SignalStudio dashboard.
 
 ### OANDA (Forex)
 - Config: `accountId`, `accessToken`, `environment` (`practice` or `live`)

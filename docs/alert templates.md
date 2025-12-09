@@ -1,12 +1,43 @@
 ## Alert Templates
 
-Use these snippets as starting points. Replace placeholders with your symbols, strikes, and strategy-specific fields.  
-⚠️ `size` / `sizePercent` currently only affect Tradier options flows—other exchanges use the fixed dollar amounts defined in `config.json`.
+Use these snippets as starting points. Replace placeholders with your symbols, strikes, and strategy-specific fields.
 
-### Aster (crypto perps)
+**⚠️ Important:** TradingView alerts should be sent to **SignalStudio** (`https://app.signal-studio.co/api/webhook`), not directly to Sparky Bot.
+
+**Simple Alert Format (Recommended):**
+If you have a strategy configured in SignalStudio, you can use this minimal format:
 ```json
 {
-  "secret": "Sparky_Bot_Secret_XYZ123",
+  "secret": "your-webhook-secret",
+  "strategy": "your-strategy-name",
+  "action": "{{strategy.order.action}}",
+  "symbol": "{{ticker}}"
+}
+```
+
+SignalStudio will automatically build the complete order from your strategy configuration.
+
+**Full Alert Format (For overrides or direct webhooks):**
+Use the templates below if you want to override strategy settings or send directly to Sparky Bot.
+
+⚠️ `size` / `sizePercent` currently only affect Tradier options flows—other exchanges use position size from SignalStudio orders or `config.json`.
+
+### Aster (crypto perps)
+
+**Simple Alert (Recommended):**
+```json
+{
+  "secret": "your-webhook-secret",
+  "strategy": "your-strategy-name",
+  "action": "{{strategy.order.action}}",
+  "symbol": "{{ticker}}"
+}
+```
+
+**Full Alert (Override):**
+```json
+{
+  "secret": "your-webhook-secret",
   "exchange": "aster",
   "action": "buy",
   "symbol": "{{ticker}}",
@@ -17,9 +48,10 @@ Use these snippets as starting points. Replace placeholders with your symbols, s
 }
 ```
 
+**Full Alert (Override):**
 ```json
 {
-  "secret": "Sparky_Bot_Secret_XYZ123",
+  "secret": "your-webhook-secret",
   "exchange": "aster",
   "action": "sell",
   "symbol": "{{ticker}}",

@@ -16,6 +16,8 @@ const {
   testConnection,
   getBotCredentials,
   validateWebhookSecret,
+  initializeCredentialCache,
+  refreshCredentialCache,
 } = require('./supabaseClient');
 
 // ==================== Configuration ====================
@@ -351,40 +353,79 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
       });
     }
 
-    // Validate webhook secret
-    // First try per-user validation from Supabase (preferred method)
+    // =========================================================================
+    // AUTHENTICATION: Trust SignalStudio or Validate Direct Webhooks
+    // =========================================================================
+    // If the order comes from SignalStudio (has user_id), trust it - SignalStudio
+    // already validated the webhook secret and user authentication.
+    // 
+    // For direct webhooks (no user_id), validate the secret ourselves.
+    // =========================================================================
+    
     let userCredential = null;
-    if (alertData.secret) {
-      try {
-        userCredential = await validateWebhookSecret(alertData.secret);
-      } catch (error) {
-        logger.warn('Error validating webhook secret from Supabase:', error);
-        // Fall through to legacy validation
-      }
-    }
-
-    // If Supabase validation failed, fall back to legacy single-secret validation
-    // This provides backward compatibility for direct webhooks
-    if (!userCredential) {
-      if (!alertData.secret || alertData.secret !== WEBHOOK_SECRET) {
-        logger.warn('Unauthorized webhook attempt', {
-          ip: req.ip,
-          secret: alertData.secret ? '[PROVIDED]' : '[MISSING]',
-          hasBody: Object.keys(alertData).length > 0,
-          validationMethod: 'legacy',
-        });
-        return res.status(401).json({
-          success: false,
-          error: 'Unauthorized: Invalid webhook secret',
-          hint: alertData.secret ? 'Secret provided but incorrect' : 'Secret missing from webhook body',
-        });
-      }
-      logger.info('Webhook validated using legacy single-secret method');
-    } else {
-      logger.info('Webhook validated using per-user secret from Supabase', {
-        userId: userCredential.userId,
-        label: userCredential.label,
+    const isFromSignalStudio = alertData.user_id || alertData.userId;
+    
+    if (isFromSignalStudio) {
+      // TRUSTED: Order forwarded from SignalStudio (already validated)
+      logger.info('🔐 Webhook from SignalStudio - trusting pre-validated order', {
+        userId: alertData.user_id || alertData.userId,
+        exchange: alertData.exchange,
+        source: 'SignalStudio (trusted)',
       });
+      
+      // Create a pseudo-credential object for downstream use
+      userCredential = {
+        userId: alertData.user_id || alertData.userId,
+        label: 'SignalStudio',
+        exchange: 'webhook',
+      };
+    } else {
+      // DIRECT WEBHOOK: Need to validate secret ourselves
+      logger.info('Direct webhook received - validating secret...');
+      
+      if (alertData.secret) {
+        try {
+          // Use cached validation (fast, no DB query) - synchronous
+          userCredential = validateWebhookSecret(alertData.secret);
+          
+          // If not in cache, fall back to Supabase query (shouldn't happen often)
+          if (!userCredential) {
+            logger.debug('Secret not in cache, querying Supabase (this should be rare)');
+            const { validateWebhookSecretFromDb } = require('./supabaseClient');
+            userCredential = await validateWebhookSecretFromDb(alertData.secret);
+            
+            // If found in DB but not cache, refresh cache
+            if (userCredential) {
+              await refreshCredentialCache();
+            }
+          }
+        } catch (error) {
+          logger.warn('Error validating webhook secret:', error);
+        }
+      }
+
+      // If Supabase validation failed, fall back to legacy single-secret validation
+      if (!userCredential) {
+        if (!alertData.secret || alertData.secret !== WEBHOOK_SECRET) {
+          logger.warn('Unauthorized webhook attempt', {
+            ip: req.ip,
+            secret: alertData.secret ? '[PROVIDED]' : '[MISSING]',
+            hasBody: Object.keys(alertData).length > 0,
+            validationMethod: 'legacy',
+          });
+          return res.status(401).json({
+            success: false,
+            error: 'Unauthorized: Invalid webhook secret',
+            hint: alertData.secret ? 'Secret provided but incorrect' : 'Secret missing from webhook body',
+          });
+        }
+        logger.info('Webhook validated using legacy single-secret method');
+      } else {
+        logger.info('Webhook validated using per-user secret from Supabase', {
+          userId: userCredential.userId,
+          label: userCredential.label,
+        });
+      }
     }
 
     // Clean up symbol (remove exchange prefix if present)
@@ -458,13 +499,19 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
     }
 
     // Execute the trade on the correct exchange
+    // Extract userId from SignalStudio forwarded order or from Supabase validation
+    const userId = alertData.user_id || alertData.userId || userCredential?.userId || null;
+    
     logger.info('Processing webhook', {
       exchange: exchange.toUpperCase(),
       action: alertData.action,
       symbol: alertData.symbol,
+      userId: userId || 'not provided',
+      source: userCredential ? 'SignalStudio (validated)' : 'direct webhook',
     });
 
-    const result = await tradeExecutors[exchange].executeWebhook(alertData);
+    // Pass userId to executor for multi-tenant data isolation
+    const result = await tradeExecutors[exchange].executeWebhook(alertData, userId);
 
     const duration = Date.now() - startTime;
     logger.info(`Webhook processed successfully in ${duration}ms`, result);
@@ -518,6 +565,20 @@ app.use((err, req, res, next) => {
 
 async function bootstrap() {
   await applySupabaseCredentials();
+
+  // Initialize credential cache for fast webhook secret validation
+  await initializeCredentialCache();
+  logger.info('✅ Credential cache initialized');
+
+  // Refresh credential cache every 30 seconds to keep it up-to-date
+  setInterval(async () => {
+    try {
+      await refreshCredentialCache();
+      logger.debug('Credential cache refreshed');
+    } catch (error) {
+      logger.warn('Failed to refresh credential cache:', error.message);
+    }
+  }, 30000); // 30 seconds
 
   WEBHOOK_SECRET = config.webhookSecret || process.env.WEBHOOK_SECRET || WEBHOOK_SECRET;
 

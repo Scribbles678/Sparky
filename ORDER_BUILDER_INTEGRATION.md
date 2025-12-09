@@ -4,14 +4,22 @@
 
 Sparky bot now receives **pre-built orders** from SignalStudio instead of building them itself. SignalStudio handles strategy configuration lookup and order building, then forwards complete orders to Sparky for execution.
 
+**Webhook Flow:**
+- TradingView → SignalStudio (`https://app.signal-studio.co/api/webhook`)
+- SignalStudio validates secret, builds order, forwards to Sparky Bot **asynchronously**
+- Sparky Bot receives pre-built order and executes trade
+
 ## Changes Made
 
-### 1. Webhook Handler Comments ✅
+### 1. Webhook Handler Updates ✅
 **File:** `src/index.js`
 
 - Added comment noting that webhook now receives pre-built orders from SignalStudio
 - Added logging to identify source (SignalStudio vs Direct webhook)
-- No logic changes - webhook handler already worked correctly
+- **Per-user secret validation**: Validates webhook secrets from Supabase `bot_credentials` table
+- **In-memory cache**: Caches webhook secrets for 30 seconds (refreshes automatically)
+- **Fallback**: Falls back to legacy `WEBHOOK_SECRET` if Supabase validation fails
+- No logic changes to order processing - webhook handler already worked correctly
 
 ### 2. Position Sizing Update ✅
 **File:** `src/tradeExecutor.js`

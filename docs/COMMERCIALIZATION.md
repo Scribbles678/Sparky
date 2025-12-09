@@ -305,7 +305,7 @@ app.post('/webhook', async (req, res, next) => {
 1. ✅ **User authentication** (webhook secrets per user)
 2. ✅ **Per-user rate limiting** (not global)
 3. ✅ **Isolated position tracking** (Redis or database)
-4. ✅ **User dashboard** (TradeFI integration)
+4. ✅ **User dashboard** (SignalStudio integration)
 5. ✅ **Billing/subscription system** (Stripe integration)
 6. ✅ **Support system** (tickets, email)
 7. ✅ **Monitoring/alerting** (uptime, errors)

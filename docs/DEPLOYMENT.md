@@ -92,7 +92,7 @@ NODE_ENV=production
 PORT=3000
 LOG_LEVEL=info
 
-# Supabase (required for TradeFI + settings service)
+# Supabase (required for SignalStudio + settings service)
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=your_service_role_key_here
 SUPABASE_ANON_KEY=your_anon_key_here
@@ -256,10 +256,23 @@ Follow the prompts. Certbot will automatically update your Nginx config.
 2. Create or edit an alert
 3. In the "Notifications" tab, enable "Webhook URL"
 4. Enter your webhook URL:
-   - With domain + SSL: `https://your-domain.com/webhook`
-   - Without domain: `http://YOUR_DROPLET_IP:3000/webhook`
+   ```
+   https://app.signal-studio.co/api/webhook
+   ```
 
-5. Set the message body (customize for your strategy):
+5. Set the message body:
+
+**Simple Alert (Recommended - if using SignalStudio strategies):**
+```json
+{
+  "secret": "your-webhook-secret-from-signalstudio",
+  "strategy": "your-strategy-name",
+  "action": "{{strategy.order.action}}",
+  "symbol": "{{ticker}}"
+}
+```
+
+**Full Alert (For direct webhooks or overrides):**
 ```json
 {
   "secret": "your-webhook-secret",
@@ -277,7 +290,7 @@ Follow the prompts. Certbot will automatically update your Nginx config.
 }
 ```
 
-Adjust the message based on your strategy and needs.
+**Note:** SignalStudio will build the complete order from your strategy configuration and forward it to Sparky Bot. Sparky Bot receives pre-built orders and executes them.
 
 ## Step 9: Monitoring & Maintenance
 
