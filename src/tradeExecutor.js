@@ -13,6 +13,12 @@ const {
   removePosition,
 } = require('./supabaseClient');
 const StrategyManager = require('./strategyManager');
+const {
+  notifyTradeSuccess,
+  notifyTradeFailed,
+  notifyPositionClosedProfit,
+  notifyPositionClosedLoss,
+} = require('./utils/notifications');
 
 class TradeExecutor {
   /**
@@ -364,6 +370,18 @@ class TradeExecutor {
 
       logger.info(`Position opened successfully for ${symbol}`);
 
+      // Send notification (async, fire-and-forget)
+      if (alertData.userId) {
+        notifyTradeSuccess(
+          alertData.userId,
+          symbol,
+          side,
+          this.exchange,
+          roundedQuantity,
+          entryPrice
+        );
+      }
+
       return {
         success: true,
         action: 'opened',
@@ -371,6 +389,18 @@ class TradeExecutor {
       };
     } catch (error) {
       logger.logError('Failed to open position', error, { symbol, action });
+      
+      // Send failure notification (async, fire-and-forget)
+      if (alertData.userId) {
+        notifyTradeFailed(
+          alertData.userId,
+          symbol,
+          action,
+          this.exchange,
+          error.message
+        );
+      }
+      
       throw error;
     }
   }
@@ -524,6 +554,15 @@ class TradeExecutor {
       this.tracker.removePosition(symbol, this.exchange);
 
       logger.info(`Position closed successfully for ${symbol} with P&L: $${pnlUsd.toFixed(2)}`);
+
+      // Send notification based on P&L (async, fire-and-forget)
+      if (userId) {
+        if (pnlUsd >= 0) {
+          notifyPositionClosedProfit(userId, symbol, this.exchange, pnlUsd, pnlPercent);
+        } else {
+          notifyPositionClosedLoss(userId, symbol, this.exchange, pnlUsd, pnlPercent);
+        }
+      }
 
       return {
         success: true,

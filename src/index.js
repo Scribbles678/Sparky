@@ -21,6 +21,7 @@ const {
   initializeCredentialCache,
   refreshCredentialCache,
 } = require('./supabaseClient');
+const { notifyInvalidCredentials, notifyTradeFailed } = require('./utils/notifications');
 
 // ==================== Configuration ====================
 
@@ -528,6 +529,9 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
       exchangeApi = await ExchangeFactory.createExchangeForUser(userId, exchange);
       
       if (!exchangeApi) {
+        // Send notification about missing credentials
+        notifyInvalidCredentials(userId, exchange);
+        
         return res.status(400).json({
           success: false,
           error: `No ${exchange} API credentials found for user. Please configure your ${exchange} API keys in SignalStudio.`,
@@ -567,6 +571,18 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
       duration: `${duration}ms`,
       body: req.body,
     });
+
+    // Send failure notification (async, fire-and-forget)
+    const userId = alertData?.user_id || alertData?.userId;
+    if (userId && alertData?.symbol) {
+      notifyTradeFailed(
+        userId,
+        alertData.symbol,
+        alertData.action || 'unknown',
+        alertData.exchange || 'unknown',
+        error.message
+      );
+    }
 
     res.status(500).json({
       success: false,

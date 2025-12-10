@@ -50,9 +50,12 @@ Supported Exchanges:
 
 ## Documentation & Maintenance
 
+- [docs/MULTI_TENANT.md](docs/MULTI_TENANT.md) – **Multi-tenant credential loading from SignalStudio**
+- [docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md) – **Server-side notifications system**
 - [docs/EXCHANGES.md](docs/EXCHANGES.md) – exchange-specific auth, sizing, and quirks.
 - [docs/STRATEGIES.md](docs/STRATEGIES.md) – strategy metadata, trailing stops, options.
 - [docs/TRADINGVIEW.md](docs/TRADINGVIEW.md) – webhook payload expectations + troubleshooting.
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) – VPS deployment guide
 - Supabase/SQL migrations live in [`schema/`](schema/).
 
 > **Whenever you change behavior or schema, update the related markdown or SQL in this repo.**  
