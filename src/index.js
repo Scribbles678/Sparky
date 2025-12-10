@@ -637,84 +637,101 @@ async function bootstrap() {
     process.exit(1);
   }
 
+  // =========================================================================
+  // MULTI-TENANT MODE: Exchange credentials loaded per-user from Supabase
+  // =========================================================================
+  // In multi-tenant mode, exchanges are created dynamically when webhooks arrive.
+  // Pre-configured exchanges in config.json are optional (for legacy/testing).
+  // =========================================================================
+  
   exchanges = ExchangeFactory.createAllExchanges(config);
 
   if (Object.keys(exchanges).length === 0) {
-    logger.error('No exchanges configured! Please add at least one exchange via TradeFI.');
-    process.exit(1);
+    logger.info('ℹ️  No pre-configured exchanges in config.json');
+    logger.info('   Running in MULTI-TENANT mode - credentials loaded per-user from Supabase');
+  } else {
+    logger.info(`Pre-configured exchanges (legacy): ${Object.keys(exchanges).join(', ')}`);
+    
+    // Initialize legacy executors for backward compatibility
+    for (const [exchangeName, exchangeApi] of Object.entries(exchanges)) {
+      const ExecutorClass = exchangeName === 'tradier_options'
+        ? TradierOptionsExecutor
+        : TradeExecutor;
+
+      const executor = new ExecutorClass(exchangeApi, positionTracker, config);
+      executor.strategyManager = sharedStrategyManager;
+      tradeExecutors[exchangeName] = executor;
+      positionUpdaters[exchangeName] = new PositionUpdater(exchangeApi, positionTracker, config);
+
+      if (exchangeName === 'tradier_options') {
+        optionMonitors[exchangeName] = new TradierOptionsMonitor(exchangeApi, config);
+      }
+      logger.info(`✅ ${exchangeName.toUpperCase()} executor initialized (legacy)`);
+    }
   }
 
-  logger.info(`Configured exchanges: ${Object.keys(exchanges).join(', ')}`);
-
+  // Initialize settings service with supported exchanges
   await settingsService.initialize({
-    exchanges: Object.keys(exchanges),
+    exchanges: ExchangeFactory.getSupportedExchanges(),
     config,
     intervalMs: 60_000,
   }).catch((error) => {
     logger.warn(`Failed to initialize trade settings service: ${error.message}`);
   });
 
-  for (const [exchangeName, exchangeApi] of Object.entries(exchanges)) {
-    const ExecutorClass = exchangeName === 'tradier_options'
-      ? TradierOptionsExecutor
-      : TradeExecutor;
-
-    const executor = new ExecutorClass(exchangeApi, positionTracker, config);
-    executor.strategyManager = sharedStrategyManager;
-    tradeExecutors[exchangeName] = executor;
-    positionUpdaters[exchangeName] = new PositionUpdater(exchangeApi, positionTracker, config);
-
-    if (exchangeName === 'tradier_options') {
-      optionMonitors[exchangeName] = new TradierOptionsMonitor(exchangeApi, config);
-    }
-    logger.info(`✅ ${exchangeName.toUpperCase()} executor initialized`);
-  }
-
-  asterApi = exchanges.aster || Object.values(exchanges)[0];
-  primaryPositionUpdater = positionUpdaters.aster || Object.values(positionUpdaters)[0];
+  asterApi = exchanges.aster || Object.values(exchanges)[0] || null;
+  primaryPositionUpdater = positionUpdaters.aster || Object.values(positionUpdaters)[0] || null;
 
   server = app.listen(PORT, async () => {
     logger.info(`🚀 Sparky Trading Bot started on port ${PORT}`);
     logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
-    logger.info(`API URL: ${config.aster.apiUrl || 'N/A'}`);
-    logger.info(`Position size: $${config.tradeAmount || 0} per trade`);
+    logger.info(`Mode: ${Object.keys(exchanges).length > 0 ? 'Legacy + Multi-tenant' : 'Multi-tenant only'}`);
     
     let dbConnected = false;
     
-    try {
-      const balance = await asterApi.getAvailableMargin();
-      logger.info(`✅ API connection successful. Available margin: $${balance.toFixed(2)}`);
-    } catch (error) {
-      logger.error('❌ Failed to connect to Aster API', error.message);
-      logger.error('Please check your API credentials');
-    }
-
+    // Test database connection (REQUIRED for multi-tenant mode)
     try {
       dbConnected = await testConnection();
       if (dbConnected) {
         logger.info('✅ Database connection successful');
       } else {
-        logger.warn('⚠️  Database not configured. Trades will not be logged to Supabase.');
-        logger.warn('Add SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to .env to enable database logging.');
+        logger.error('❌ Database not configured - REQUIRED for multi-tenant mode!');
+        logger.error('   Add SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to .env');
       }
     } catch (error) {
-      logger.warn('⚠️  Database connection failed', error.message);
+      logger.error('❌ Database connection failed:', error.message);
       dbConnected = false;
     }
 
-    try {
-      await positionTracker.syncWithExchange(asterApi);
-      logger.info('✅ Positions synced with exchange on startup');
-    } catch (error) {
-      logger.warn('⚠️  Failed to sync positions on startup', error.message);
+    // Test legacy exchange connection (optional)
+    if (asterApi) {
+      try {
+        const balance = await asterApi.getAvailableMargin();
+        logger.info(`✅ Legacy API connection successful. Available margin: $${balance.toFixed(2)}`);
+      } catch (error) {
+        logger.warn('⚠️  Legacy API connection failed:', error.message);
+        logger.info('   This is OK in multi-tenant mode - credentials loaded per-user');
+      }
+
+      try {
+        await positionTracker.syncWithExchange(asterApi);
+        logger.info('✅ Positions synced with exchange on startup');
+      } catch (error) {
+        logger.warn('⚠️  Failed to sync positions on startup:', error.message);
+      }
+    } else {
+      logger.info('ℹ️  No legacy exchange configured - skipping startup sync');
+      logger.info('   Position sync will happen per-user when webhooks arrive');
     }
 
     if (dbConnected && primaryPositionUpdater) {
       primaryPositionUpdater.start();
       logger.info('✅ Position price updater started (updates every 30s)');
       logger.info('✅ Auto-sync enabled (syncs with exchange every 5 minutes)');
+    } else if (dbConnected) {
+      logger.info('ℹ️  Position price updater skipped (no legacy exchange configured)');
     } else {
-      logger.info('ℹ️  Position price updater skipped (database not configured)');
+      logger.warn('⚠️  Position price updater skipped (database not configured)');
     }
 
     Object.entries(optionMonitors).forEach(([name, monitor]) => {
