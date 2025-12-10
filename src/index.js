@@ -119,7 +119,6 @@ async function applySupabaseCredentials() {
 
 // ==================== Initialize Components ====================
 
-const ExchangeFactory = require('./exchanges/ExchangeFactory');
 const positionTracker = new PositionTracker();
 const StrategyManager = require('./strategyManager');
 const sharedStrategyManager = new StrategyManager();
