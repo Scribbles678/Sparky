@@ -6,6 +6,7 @@ const logger = require('../utils/logger');
 class HyperliquidAPI extends BaseExchangeAPI {
   constructor(apiKey, privateKey, baseUrl = 'https://api.hyperliquid.xyz', isTestnet = false) {
     super();
+    this.exchangeName = 'hyperliquid';
     this.apiKey = apiKey;
     this.privateKey = privateKey;
     this.baseUrl = baseUrl;

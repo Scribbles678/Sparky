@@ -566,6 +566,100 @@ async function getBotCredentials() {
 }
 
 /**
+ * Fetch a specific user's exchange credentials
+ * This is the CORE function for multi-tenant credential loading.
+ * Each user's API keys are stored in SignalStudio (bot_credentials table).
+ * 
+ * CACHING: Uses Redis to cache credentials for 60 seconds to reduce DB queries.
+ * 
+ * @param {string} userId - The user's UUID
+ * @param {string} exchange - The exchange name (e.g., 'aster', 'oanda')
+ * @returns {Promise<Object|null>} - Credentials object or null if not found
+ */
+async function getUserExchangeCredentials(userId, exchange) {
+  if (!supabase) {
+    console.error('❌ Supabase not configured, cannot fetch user credentials');
+    return null;
+  }
+
+  if (!userId) {
+    console.error('❌ userId is required to fetch exchange credentials');
+    return null;
+  }
+
+  if (!exchange) {
+    console.error('❌ exchange is required to fetch credentials');
+    return null;
+  }
+
+  const exchangeLower = exchange.toLowerCase();
+  const cacheKey = `credentials:${userId}:${exchangeLower}`;
+
+  // Try to use Redis cache if available
+  try {
+    const { getOrSetCache, isRedisAvailable } = require('./utils/redis');
+    
+    if (isRedisAvailable()) {
+      return await getOrSetCache(
+        cacheKey,
+        () => fetchCredentialsFromDb(userId, exchangeLower),
+        60 // Cache for 60 seconds
+      );
+    }
+  } catch (error) {
+    // Redis not available - fall through to direct DB fetch
+    console.debug('[Credentials] Redis not available, fetching from DB directly');
+  }
+
+  // Direct DB fetch (fallback if Redis not available)
+  return await fetchCredentialsFromDb(userId, exchangeLower);
+}
+
+/**
+ * Internal function to fetch credentials from Supabase
+ * @private
+ */
+async function fetchCredentialsFromDb(userId, exchange) {
+  try {
+    const { data, error } = await supabase
+      .from('bot_credentials')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('exchange', exchange)
+      .eq('environment', 'production')
+      .maybeSingle();
+
+    if (error) {
+      console.error(`❌ Error fetching ${exchange} credentials for user ${userId}:`, error);
+      return null;
+    }
+
+    if (!data) {
+      console.warn(`⚠️ No ${exchange} credentials found for user ${userId}`);
+      return null;
+    }
+
+    console.log(`✅ Loaded ${exchange} credentials for user ${userId} (label: ${data.label || 'default'})`);
+    
+    return {
+      userId: data.user_id,
+      exchange: data.exchange,
+      label: data.label,
+      apiKey: data.api_key,
+      apiSecret: data.api_secret,
+      // Additional fields that might be needed for specific exchanges
+      accountId: data.account_id,
+      accessToken: data.access_token,
+      environment: data.environment,
+      extra: data.extra_config || {},
+    };
+  } catch (error) {
+    console.error(`❌ Exception fetching ${exchange} credentials for user ${userId}:`, error);
+    return null;
+  }
+}
+
+/**
  * In-memory cache for webhook credentials
  * Maps webhook_secret -> { userId, exchange, label }
  */
@@ -751,6 +845,7 @@ module.exports = {
   getTradeSettingsGlobal,
   getExchangeTradeSettings,
   getBotCredentials,
+  getUserExchangeCredentials,  // NEW: Per-user credential loading for multi-tenant
   validateWebhookSecret,
   validateWebhookSecretFromDb,
   initializeCredentialCache,

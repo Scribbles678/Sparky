@@ -1,6 +1,10 @@
 /**
  * Exchange Factory
  * Creates and returns the appropriate exchange API instance
+ * 
+ * MULTI-TENANT SUPPORT:
+ * - createExchangeForUser(): Creates exchange instance with user's credentials from Supabase
+ * - createExchange(): Creates instance from provided config (legacy/fallback)
  */
 
 const AsterAPI = require('../asterApi');
@@ -10,6 +14,7 @@ const TradierOptionsAPI = require('./tradierOptionsApi');
 const LighterAPI = require('./lighterApi');
 const { HyperliquidAPI } = require('./hyperliquidApi');
 const logger = require('../utils/logger');
+const { getUserExchangeCredentials } = require('../supabaseClient');
 
 class ExchangeFactory {
   /**
@@ -169,6 +174,107 @@ class ExchangeFactory {
    */
   static getSupportedExchanges() {
     return ['aster', 'oanda', 'tradier', 'tradier_options', 'lighter', 'hyperliquid'];
+  }
+
+  /**
+   * MULTI-TENANT: Create an exchange API instance using user's credentials from Supabase
+   * This is the PRIMARY method for creating exchange connections in a multi-tenant environment.
+   * 
+   * @param {string} userId - The user's UUID (from SignalStudio)
+   * @param {string} exchangeName - Name of the exchange ('aster', 'oanda', etc.)
+   * @returns {Promise<object|null>} Exchange API instance or null if credentials not found
+   */
+  static async createExchangeForUser(userId, exchangeName) {
+    const name = exchangeName.toLowerCase();
+    
+    logger.info(`🔐 Loading ${name} credentials for user ${userId}...`);
+    
+    // Fetch user's credentials from Supabase (SignalStudio is source of truth)
+    const credentials = await getUserExchangeCredentials(userId, name);
+    
+    if (!credentials) {
+      logger.error(`❌ No ${name} credentials found for user ${userId}`);
+      logger.error(`   User must configure their ${name} API keys in SignalStudio`);
+      return null;
+    }
+    
+    // Map database fields to exchange config format
+    const config = this.mapCredentialsToConfig(name, credentials);
+    
+    if (!config) {
+      logger.error(`❌ Failed to map credentials for ${name}`);
+      return null;
+    }
+    
+    try {
+      const api = this.createExchange(name, config);
+      logger.info(`✅ Created ${name} API instance for user ${userId}`);
+      return api;
+    } catch (error) {
+      logger.error(`❌ Failed to create ${name} API for user ${userId}: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Map database credential fields to exchange-specific config format
+   * @param {string} exchangeName - Name of the exchange
+   * @param {object} credentials - Credentials from Supabase
+   * @returns {object|null} Config object for createExchange()
+   */
+  static mapCredentialsToConfig(exchangeName, credentials) {
+    const name = exchangeName.toLowerCase();
+    
+    switch (name) {
+      case 'aster':
+        return {
+          apiKey: credentials.apiKey,
+          apiSecret: credentials.apiSecret,
+          apiUrl: credentials.extra?.apiUrl || 'https://fapi.asterdex.com',
+        };
+      
+      case 'oanda':
+        return {
+          accountId: credentials.accountId || credentials.extra?.accountId,
+          accessToken: credentials.accessToken || credentials.apiKey,
+          environment: credentials.environment || 'practice',
+        };
+      
+      case 'tradier':
+        return {
+          accountId: credentials.accountId || credentials.extra?.accountId,
+          accessToken: credentials.accessToken || credentials.apiKey,
+          environment: credentials.environment || 'sandbox',
+        };
+
+      case 'tradier_options':
+        return {
+          accountId: credentials.accountId || credentials.extra?.accountId,
+          accessToken: credentials.accessToken || credentials.apiKey,
+          environment: credentials.environment || 'sandbox',
+        };
+      
+      case 'lighter':
+        return {
+          apiKey: credentials.apiKey,
+          privateKey: credentials.apiSecret,
+          accountIndex: credentials.extra?.accountIndex || 0,
+          apiKeyIndex: credentials.extra?.apiKeyIndex || 2,
+          baseUrl: credentials.extra?.baseUrl || 'https://mainnet.zklighter.elliot.ai',
+        };
+      
+      case 'hyperliquid':
+        return {
+          apiKey: credentials.apiKey,
+          privateKey: credentials.apiSecret,
+          baseUrl: credentials.extra?.baseUrl || 'https://api.hyperliquid.xyz',
+          isTestnet: credentials.extra?.isTestnet || false,
+        };
+      
+      default:
+        logger.error(`Unknown exchange for credential mapping: ${exchangeName}`);
+        return null;
+    }
   }
 }
 

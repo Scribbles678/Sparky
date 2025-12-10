@@ -12,6 +12,8 @@ const TradierOptionsMonitor = require('./monitors/tradierOptionsMonitor');
 const PositionUpdater = require('./positionUpdater');
 const strategyRoutes = require('./api/strategies');
 const settingsService = require('./settings/settingsService');
+const ExchangeFactory = require('./exchanges/ExchangeFactory');
+const { initRedis, isRedisAvailable } = require('./utils/redis');
 const {
   testConnection,
   getBotCredentials,
@@ -491,14 +493,15 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
 
     const exchange = alertData.exchange.toLowerCase();
 
-    if (!tradeExecutors[exchange]) {
+    // Validate exchange is supported
+    const supportedExchanges = ExchangeFactory.getSupportedExchanges();
+    if (!supportedExchanges.includes(exchange)) {
       return res.status(400).json({
         success: false,
-        error: `Exchange "${exchange}" not configured. Available exchanges: ${Object.keys(tradeExecutors).join(', ')}`,
+        error: `Exchange "${exchange}" not supported. Available exchanges: ${supportedExchanges.join(', ')}`,
       });
     }
 
-    // Execute the trade on the correct exchange
     // Extract userId from SignalStudio forwarded order or from Supabase validation
     const userId = alertData.user_id || alertData.userId || userCredential?.userId || null;
     
@@ -507,11 +510,49 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
       action: alertData.action,
       symbol: alertData.symbol,
       userId: userId || 'not provided',
-      source: userCredential ? 'SignalStudio (validated)' : 'direct webhook',
+      source: isFromSignalStudio ? 'SignalStudio (trusted)' : 'direct webhook',
     });
 
-    // Pass userId to executor for multi-tenant data isolation
-    const result = await tradeExecutors[exchange].executeWebhook(alertData, userId);
+    // =========================================================================
+    // MULTI-TENANT: Create exchange API with user's credentials
+    // =========================================================================
+    // For multi-tenant operation, each user's API credentials are stored in
+    // SignalStudio (bot_credentials table). We load them dynamically here.
+    // =========================================================================
+    
+    let exchangeApi;
+    let executor;
+    
+    if (userId) {
+      // MULTI-TENANT: Load user's exchange credentials from Supabase
+      logger.info(`🔐 Loading ${exchange} credentials for user ${userId}...`);
+      exchangeApi = await ExchangeFactory.createExchangeForUser(userId, exchange);
+      
+      if (!exchangeApi) {
+        return res.status(400).json({
+          success: false,
+          error: `No ${exchange} API credentials found for user. Please configure your ${exchange} API keys in SignalStudio.`,
+          hint: 'Go to SignalStudio → Settings → Bot Credentials to add your API keys.',
+        });
+      }
+      
+      // Create a temporary trade executor with user's exchange API
+      executor = new TradeExecutor(exchangeApi, positionTracker, config, exchange);
+      logger.info(`✅ Created ${exchange} executor for user ${userId}`);
+    } else {
+      // LEGACY: Fall back to pre-initialized executors (for backward compatibility)
+      logger.warn('⚠️ No userId provided - using legacy pre-initialized executor');
+      if (!tradeExecutors[exchange]) {
+        return res.status(400).json({
+          success: false,
+          error: `Exchange "${exchange}" not configured and no user credentials available.`,
+        });
+      }
+      executor = tradeExecutors[exchange];
+    }
+
+    // Execute the trade
+    const result = await executor.executeWebhook(alertData, userId);
 
     const duration = Date.now() - startTime;
     logger.info(`Webhook processed successfully in ${duration}ms`, result);
@@ -564,6 +605,15 @@ app.use((err, req, res, next) => {
 // ==================== Server Startup ====================
 
 async function bootstrap() {
+  // Initialize Redis for credential caching (optional but recommended)
+  initRedis();
+  if (isRedisAvailable()) {
+    logger.info('✅ Redis connected - credential caching enabled');
+  } else {
+    logger.warn('⚠️ Redis not available - credentials will be fetched from Supabase on each request');
+    logger.warn('   Set REDIS_URL in .env for faster performance');
+  }
+
   await applySupabaseCredentials();
 
   // Initialize credential cache for fast webhook secret validation

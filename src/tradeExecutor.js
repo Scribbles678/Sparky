@@ -15,13 +15,19 @@ const {
 const StrategyManager = require('./strategyManager');
 
 class TradeExecutor {
-  constructor(asterApi, positionTracker, config) {
-    this.api = asterApi;
+  /**
+   * @param {Object} exchangeApi - Exchange API instance (AsterAPI, OandaAPI, etc.)
+   * @param {Object} positionTracker - Position tracker instance
+   * @param {Object} config - Bot configuration
+   * @param {string} [exchangeName] - Optional exchange name override (for multi-tenant dynamic instances)
+   */
+  constructor(exchangeApi, positionTracker, config, exchangeName = null) {
+    this.api = exchangeApi;
     this.tracker = positionTracker;
     this.config = config;
     this.strategyManager = new StrategyManager();
-    // Determine exchange name from API instance
-    this.exchange = asterApi.exchangeName || asterApi.getExchangeName?.() || 'aster';
+    // Determine exchange name: explicit > from API instance > default
+    this.exchange = exchangeName || exchangeApi.exchangeName || exchangeApi.getExchangeName?.() || 'aster';
   }
 
   /**
