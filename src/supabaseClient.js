@@ -461,41 +461,14 @@ async function getOpenPositions() {
 }
 
 /**
- * Fetch global trade settings (or defaults if none/config missing)
+ * Fetch global trade settings
+ * NOTE: Global settings are now managed in SignalStudio UI, not a separate table.
+ * This function returns defaults - per-user settings come from strategies/order_config.
  * @returns {Promise<Object>}
  */
 async function getTradeSettingsGlobal() {
-  if (!supabase) {
-    return { ...DEFAULT_GLOBAL_SETTINGS };
-  }
-
-  try {
-    const { data, error } = await supabase
-      .from('trade_settings_global')
-      .select('*')
-      .order('updated_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (error) {
-      console.error('❌ Error fetching global trade settings:', error);
-      return { ...DEFAULT_GLOBAL_SETTINGS };
-    }
-
-    if (!data) {
-      return { ...DEFAULT_GLOBAL_SETTINGS };
-    }
-
-    return {
-      ...DEFAULT_GLOBAL_SETTINGS,
-      ...data,
-      trading_window: parseJsonArray(data.trading_window, DEFAULT_GLOBAL_SETTINGS.trading_window),
-      extra_settings: data.extra_settings || {},
-    };
-  } catch (error) {
-    console.error('❌ Exception fetching global trade settings:', error);
-    return { ...DEFAULT_GLOBAL_SETTINGS };
-  }
+  // Global settings managed in SignalStudio - return defaults
+  return { ...DEFAULT_GLOBAL_SETTINGS };
 }
 
 /**
