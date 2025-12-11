@@ -13,6 +13,7 @@ const TradierAPI = require('./tradierApi');
 const TradierOptionsAPI = require('./tradierOptionsApi');
 const LighterAPI = require('./lighterApi');
 const { HyperliquidAPI } = require('./hyperliquidApi');
+const CCXTExchangeAPI = require('./ccxtExchangeApi');
 const logger = require('../utils/logger');
 const { getUserExchangeCredentials } = require('../supabaseClient');
 
@@ -93,7 +94,17 @@ class ExchangeFactory {
         );
       
       default:
-        throw new Error(`Unknown exchange: ${exchangeName}. Supported: aster, oanda, tradier, tradier_options, lighter, hyperliquid`);
+        // Try CCXT for any other exchange (apex, binance, coinbase, etc.)
+        // CCXT supports 100+ exchanges with unified API
+        try {
+          return new CCXTExchangeAPI(name, config);
+        } catch (ccxtError) {
+          throw new Error(
+            `Unknown exchange: ${exchangeName}. ` +
+            `Custom exchanges: aster, oanda, tradier, tradier_options, lighter, hyperliquid. ` +
+            `CCXT error: ${ccxtError.message}`
+          );
+        }
     }
   }
 
@@ -173,7 +184,21 @@ class ExchangeFactory {
    * @returns {array} List of supported exchange names
    */
   static getSupportedExchanges() {
-    return ['aster', 'oanda', 'tradier', 'tradier_options', 'lighter', 'hyperliquid'];
+    // Custom exchanges + CCXT exchanges (100+)
+    const customExchanges = ['aster', 'oanda', 'tradier', 'tradier_options', 'lighter', 'hyperliquid'];
+    
+    // Get CCXT exchanges (dynamically)
+    try {
+      const ccxt = require('ccxt');
+      const ccxtExchanges = Object.keys(ccxt)
+        .filter(k => !k.startsWith('_') && typeof ccxt[k] === 'function')
+        .map(k => k.toLowerCase());
+      
+      return [...customExchanges, ...ccxtExchanges];
+    } catch (e) {
+      // CCXT not installed, return only custom exchanges
+      return customExchanges;
+    }
   }
 
   /**
@@ -272,8 +297,16 @@ class ExchangeFactory {
         };
       
       default:
-        logger.error(`Unknown exchange for credential mapping: ${exchangeName}`);
-        return null;
+        // Try CCXT exchange (apex, binance, coinbase, etc.)
+        // CCXT uses standard apiKey/apiSecret format
+        return {
+          apiKey: credentials.apiKey,
+          apiSecret: credentials.apiSecret,
+          passphrase: credentials.passphrase || credentials.extra?.passphrase, // Some exchanges need this
+          environment: credentials.environment || 'production',
+          sandbox: credentials.environment === 'sandbox',
+          options: credentials.extra?.options || {},
+        };
     }
   }
 }
