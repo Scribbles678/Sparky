@@ -198,6 +198,48 @@ app.use((req, res, next) => {
 // Strategy management routes
 app.use('/api/strategies', strategyRoutes);
 
+// AI webhook routes (internal use only)
+const webhookAiRouter = require('./routes/webhookAi');
+app.use('/webhook', webhookAiRouter);
+
+/**
+ * AI Worker health check endpoint
+ */
+app.get('/health/ai-worker', async (req, res) => {
+  try {
+    const { createClient } = require('@supabase/supabase-js');
+    const supabase = createClient(
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_ROLE_KEY
+    );
+
+    const { data: strategies, error } = await supabase
+      .from('ai_strategies')
+      .select('id, status')
+      .eq('status', 'running');
+
+    if (error) {
+      return res.status(500).json({
+        status: 'error',
+        message: 'Failed to fetch strategies',
+        error: error.message
+      });
+    }
+
+    res.json({
+      status: 'ok',
+      activeStrategies: strategies?.length || 0,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    logger.logError('AI Worker health check failed', error);
+    res.status(500).json({
+      status: 'error',
+      message: error.message
+    });
+  }
+});
+
 /**
  * Health check endpoint
  */

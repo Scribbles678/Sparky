@@ -31,7 +31,7 @@ Logs to user's trades/positions
 
 ```javascript
 async function getUserExchangeCredentials(userId, exchange) {
-  // Check Redis cache first (5 min TTL)
+  // Check Redis cache first (60s TTL)
   // Fall back to Supabase query
   // Returns: { apiKey, apiSecret, accountId, ... }
 }

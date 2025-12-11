@@ -92,13 +92,12 @@ sparky-trading-bot/
                                └──────────────────────────────────┘
 ```
 
-### SignalStudio Dashboard Linkage
+### SignalStudio Dashboard Integration
 
-- **Repo:** `c:\Users\mjjoh\SignalStudio\signal\` (Nuxt 3 + ShadCN UI). The dashboard reads/writes Supabase through `app/utils/supabase.ts`; whenever Supabase credentials change, update that file plus the `.env`.
-- **Shared schema:** SignalStudio expects the same tables Sparky manages (`positions`, `trades`, `trade_stats`, `strategies`, `trade_settings_exchange`, `tradier_option_trades`, `webhook_requests`, `bot_credentials`, `subscriptions`, `notifications`, `notification_preferences`). Keep schema aligned between repos.
-- **Bot touchpoints:** SignalStudio server routes proxy Sparky endpoints for health and positions (`/api/sparky/health`, `/api/sparky/positions`). Trade sync utilities (`/api/trades/sync`) reconcile Supabase data.
-- **Webhook flow:** TradingView alerts go to SignalStudio (`/api/webhook`), which builds orders from strategy configs and forwards to Sparky asynchronously.
-- **Refresh cadence:** SignalStudio auto-refreshes every 30s to match Sparky's `positionUpdater`. If Supabase credentials are absent in Sparky, the updater—and therefore the dashboard—will not show live data.
+- **Repository:** SignalStudio dashboard (Nuxt 3) reads/writes Supabase through `app/utils/supabase.ts`
+- **Shared schema:** SignalStudio expects the same tables Sparky manages (`positions`, `trades`, `trade_stats`, `strategies`, `trade_settings_exchange`, `tradier_option_trades`, `webhook_requests`, `bot_credentials`, `subscriptions`, `notifications`, `notification_preferences`)
+- **Webhook flow:** TradingView → SignalStudio (`/api/webhook`) → Sparky Bot (async forwarding)
+- **Data sync:** SignalStudio auto-refreshes every 30s to match Sparky's `positionUpdater` refresh rate
 
 ## Data Flow
 

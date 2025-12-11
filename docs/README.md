@@ -11,42 +11,40 @@ A headless trading bot that receives TradingView webhook alerts and executes tra
 ```
 TradingView Alerts → SignalStudio (/api/webhook) → Sparky Bot → Multiple Exchanges
                           ↓                              ↓
-                    Redis Cache (Phase 2)          Supabase Database
+                    Redis Cache                    Supabase Database
                           ↓                              ↑
                     Supabase Database          SignalStudio Dashboard (Analytics)
 
 Supported Exchanges:
 - Aster DEX (Crypto Futures)
 - Lighter DEX (Crypto Perps on zkSync)
+- Hyperliquid (Crypto Perps)
 - OANDA (Forex)
 - Tradier (Stocks/Options)
-- Tasty Trade (Futures)
 ```
 
-**Key Changes:**
-- TradingView now sends alerts to **SignalStudio** (`https://app.signal-studio.co/api/webhook`)
-- SignalStudio builds complete orders from strategy configurations
-- SignalStudio forwards pre-built orders to Sparky Bot **asynchronously**
-- Sparky Bot validates webhook secrets per-user from Supabase (with in-memory cache)
+**Webhook Flow:**
+- TradingView sends alerts to **SignalStudio** (`https://app.signal-studio.co/api/webhook`)
+- SignalStudio validates webhook secret, builds order from strategy config, forwards to Sparky Bot **asynchronously**
+- Sparky Bot validates per-user secrets from Supabase (in-memory cache, 30s refresh)
+- Sparky Bot executes trade using user's exchange credentials from Supabase
 
 ## Features
 
 ### Trading Bot (Sparky)
-- 🔔 Receives **pre-built orders** from SignalStudio (async forwarding)
+- 🔔 Receives pre-built orders from SignalStudio (async forwarding) or direct webhooks (legacy)
 - 📊 Executes market/limit orders on multiple exchanges
-- 🛡️ **Simple percentage-based stop loss and take profit** (% of position value)
-- 📈 Position management (1 position per symbol, closes existing before opening new)
-- 💰 Position sizing from SignalStudio orders (falls back to `config.json` for direct webhooks)
-- 🔐 Multi-exchange authentication (HMAC-SHA256, API keys, etc.)
-- 🔐 **Per-user webhook secret validation** from Supabase (with in-memory cache - 30s refresh)
-- 🗄️ **Supabase integration** – Logs all trades/positions and powers the dashboard
-- 🧮 **Tradier options OTCO flow** – Executor + monitor manage entry/TP/SL legs automatically (pulls trade settings from Supabase when available)
-- ⚡ **Position price updater** – Refreshes every 30 seconds when Supabase is configured
+- 🛡️ Simple percentage-based stop loss and take profit (% of position value)
+- 📈 Position management (1 position per symbol per user, closes existing before opening new)
+- 💰 Position sizing: SignalStudio order → config.json fallback
+- 🔐 Multi-tenant: Per-user exchange credentials loaded from Supabase
+- 🔐 Per-user webhook secret validation from Supabase (in-memory cache, 30s refresh)
+- 🗄️ Supabase integration: Logs trades/positions, powers SignalStudio dashboard
+- 🧮 Tradier options OTCO flow: Executor + monitor manage entry/TP/SL legs
+- ⚡ Position price updater: Refreshes every 30s, syncs with exchange every 5min
+- 🔒 Rate limiting: 30 req/min per endpoint (webhook limits enforced by SignalStudio)
 - 📝 Comprehensive logging with Winston
 - 🔄 Auto-restart with PM2
-- 🌐 Nginx reverse proxy support for webhooks
-- 🔒 Rate limiting on webhook endpoint (per-user when using Supabase validation)
-- ⚡ **Connection pooling** – Reuses HTTP connections for faster processing
 
 ## Documentation & Maintenance
 
@@ -142,10 +140,18 @@ Copy the example config file:
 cp config.json.example config.json
 ```
 
-Edit `config.json`:
+**Multi-Tenant Mode (Recommended):**
+In multi-tenant mode, `config.json` can be minimal - credentials come from SignalStudio:
 ```json
 {
-  "tradeAmount": 100,
+  "webhookSecret": "legacy_fallback_secret"
+}
+```
+
+**Legacy Mode (Single User):**
+For backward compatibility or testing, you can still configure exchanges in `config.json`:
+```json
+{
   "webhookSecret": "your_webhook_secret_here",
   "aster": {
     "apiUrl": "https://fapi.asterdex.com",
@@ -153,20 +159,19 @@ Edit `config.json`:
     "apiSecret": "your_api_secret",
     "tradeAmount": 600
   },
-  "riskManagement": {
-    "maxPositions": 10
+  "oanda": {
+    "accountId": "YOUR_ACCOUNT_ID",
+    "accessToken": "YOUR_TOKEN",
+    "environment": "practice",
+    "tradeAmount": 10000
   }
 }
 ```
 
-**Configuration:**
-- `tradeAmount`: Legacy fallback that is only surfaced in startup logs
-- `aster.tradeAmount` (and equivalent blocks for other exchanges): Fixed position size in dollars used for live orders (e.g., 600 = $600 position per trade)
-- `webhookSecret`: Secret token for TradingView webhook authentication
-- `aster`: Your Aster DEX API credentials
-- `riskManagement.maxPositions`: Maximum number of concurrent positions
-
-**Note:** Set your desired leverage (e.g., 25x) directly on the Aster DEX exchange. The bot will use whatever leverage is configured there.
+**Configuration Notes:**
+- `webhookSecret`: Legacy fallback for direct webhooks (per-user secrets stored in Supabase)
+- `exchange.tradeAmount`: Fallback position size if not provided in SignalStudio order
+- Leverage is set directly on the exchange, not in config
 
 ### 4. Configure Supabase Integration (Optional but Recommended)
 
@@ -423,17 +428,20 @@ pm2 startup
 
 ## TradingView Webhook Setup
 
-### ⚠️ Important: Webhook URL Change
+### ⚠️ Important: Webhook URL
 
-**TradingView alerts now go to SignalStudio, not directly to Sparky Bot.**
+**TradingView alerts should go to SignalStudio, not directly to Sparky Bot.**
 
 **Webhook URL:** `https://app.signal-studio.co/api/webhook`
 
 SignalStudio will:
-1. Validate your webhook secret
-2. Build the complete order from your strategy configuration
-3. Forward the order to Sparky Bot asynchronously
-4. Respond to TradingView immediately (< 1 second)
+1. Validate your per-user webhook secret (from Supabase)
+2. Check subscription limits (monthly webhook count)
+3. Build complete order from your strategy configuration
+4. Forward order to Sparky Bot asynchronously
+5. Respond to TradingView immediately (< 1 second)
+
+**Direct webhooks to Sparky Bot** are still supported for backward compatibility but require `exchange` field and use legacy `WEBHOOK_SECRET` validation.
 
 ### Understanding Simple TP/SL 💡
 

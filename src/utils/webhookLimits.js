@@ -279,8 +279,8 @@ function cacheWebhookCount(userId, count, monthStart, monthId) {
 function getWebhookLimit(plan) {
   const limits = {
     Pro: 999999999, // Unlimited
-    Premium: 5000,
-    Basic: 1000,
+    Premium: 300,
+    Basic: 75,
     Free: 5,
   };
 

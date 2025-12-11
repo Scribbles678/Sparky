@@ -176,6 +176,24 @@ class AsterAPI {
     return this.makeRequest('GET', '/fapi/v1/ticker/price', { symbol });
   }
 
+  /**
+   * Get klines (candles) for a symbol
+   * @param {string} symbol - Trading symbol (e.g., BTCUSDT)
+   * @param {string} interval - Kline interval (1m, 5m, 15m, 1h, 4h, 1d)
+   * @param {number} limit - Number of candles to return (default 100, max 1000)
+   * @returns {Promise<Array>} Array of kline arrays [timestamp, open, high, low, close, volume, ...]
+   */
+  async getKlines(symbol, interval = '1m', limit = 100) {
+    const params = {
+      symbol,
+      interval,
+      limit: Math.min(limit, 1000) // Cap at 1000
+    };
+    
+    const response = await this.makeRequest('GET', '/fapi/v1/klines', params);
+    return response || [];
+  }
+
   // ==================== Order Methods ====================
 
   /**

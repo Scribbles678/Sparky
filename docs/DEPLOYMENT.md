@@ -4,7 +4,8 @@
 
 - DigitalOcean account
 - Domain name (optional but recommended)
-- Aster DEX API credentials
+- Supabase project (required for multi-tenant mode)
+- Exchange API credentials (configured in SignalStudio for multi-tenant, or in config.json for legacy)
 - TradingView account with alerts
 
 ## Step 1: Create DigitalOcean Droplet
@@ -92,24 +93,21 @@ NODE_ENV=production
 PORT=3000
 LOG_LEVEL=info
 
-# Supabase (required for SignalStudio + settings service)
+# Supabase (REQUIRED for multi-tenant mode)
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=your_service_role_key_here
-SUPABASE_ANON_KEY=your_anon_key_here
 
-# Webhook security
+# Webhook security (legacy fallback - per-user secrets stored in Supabase)
 WEBHOOK_SECRET=your_secure_random_string
 
-# Exchange keys (examples)
+# Optional: Redis for credential caching (recommended for performance)
+REDIS_URL=redis://localhost:6379
+
+# Exchange keys (optional - only needed for legacy single-user mode)
+# In multi-tenant mode, credentials come from SignalStudio (Supabase)
 ASTER_API_KEY=your_actual_api_key_here
 ASTER_API_SECRET=your_actual_api_secret_here
 ASTER_API_URL=https://fapi.asterdex.com
-OANDA_API_KEY=your_oanda_token_here
-OANDA_ACCOUNT_ID=101-001-28692540-001
-TRADIER_TOKEN=your_tradier_token_here
-TRADIER_ACCOUNT_ID=VA55402267
-LIGHTER_API_KEY=your_lighter_api_key_here
-LIGHTER_PRIVATE_KEY=your_eth_private_key_here
 ```
 
 ### Create config file
@@ -118,7 +116,14 @@ cp config.json.example config.json
 nano config.json
 ```
 
-Edit trading parameters:
+**Multi-Tenant Mode (Recommended):**
+```json
+{
+  "webhookSecret": "legacy_fallback_secret"
+}
+```
+
+**Legacy Mode (Single User):**
 ```json
 {
   "webhookSecret": "same_as_env_file",
@@ -127,44 +132,11 @@ Edit trading parameters:
     "apiKey": "YOUR_API_KEY",
     "apiSecret": "YOUR_API_SECRET",
     "tradeAmount": 600
-  },
-  "oanda": {
-    "accountId": "101-001-28692540-001",
-    "accessToken": "YOUR_OANDA_TOKEN",
-    "environment": "practice",
-    "tradeAmount": 10000
-  },
-  "tradier": {
-    "accountId": "VA55402267",
-    "accessToken": "YOUR_TRADIER_TOKEN",
-    "environment": "sandbox",
-    "tradeAmount": 2000
-  },
-  "tradierOptions": {
-    "accountId": "VA55402267",
-    "accessToken": "YOUR_TRADIER_TOKEN",
-    "environment": "sandbox"
-  },
-  "hyperliquid": {
-    "apiKey": "YOUR_WALLET_ADDRESS",
-    "privateKey": "YOUR_PRIVATE_KEY",
-    "baseUrl": "https://api.hyperliquid.xyz",
-    "isTestnet": false,
-    "tradeAmount": 300
-  },
-  "lighter": {
-    "apiKey": "YOUR_LIGHTER_API_KEY",
-    "privateKey": "YOUR_ETH_PRIVATE_KEY",
-    "accountIndex": 0,
-    "apiKeyIndex": 2,
-    "baseUrl": "https://mainnet.zklighter.elliot.ai",
-    "tradeAmount": 500
-  },
-  "riskManagement": {
-    "maxPositions": 20
   }
 }
 ```
+
+**Note:** In multi-tenant mode, exchange credentials are stored in SignalStudio (Supabase `bot_credentials` table). The `config.json` can be minimal.
 
 ### Secure the files
 ```bash
