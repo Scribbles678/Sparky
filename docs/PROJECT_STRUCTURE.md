@@ -9,6 +9,8 @@ sparky-trading-bot/
 │   ├── TRADINGVIEW.md            # Webhook payload guide
 │   ├── DEPLOYMENT.md             # VPS setup
 │   ├── PROJECT_STRUCTURE.md      # (this file)
+│   ├── MULTI_TENANT.md           # Multi-tenant credential loading
+│   ├── NOTIFICATIONS.md          # Server-side notifications
 │   ├── alert templates.md        # Copy-paste alert JSON
 │   └── schema/                   # Supabase SQL migrations
 │
@@ -22,7 +24,8 @@ sparky-trading-bot/
 │   ├── supabaseClient.js
 │   ├── positionTracker.js
 │   ├── positionUpdater.js
-│   └── utils/ (logger, calculations)
+│   ├── strategyManager.js
+│   └── utils/ (logger, calculations, notifications, redis)
 │
 ├── test/                         # Manual test helpers
 │   ├── testWebhook.js            # Webhook smoke tests
@@ -44,63 +47,58 @@ sparky-trading-bot/
 │                         TradingView                              │
 │                    (Sends webhook alerts)                        │
 └──────────────────────────┬──────────────────────────────────────┘
-                           │ POST /webhook
-                           │ { action, symbol, price, ... }
+                           │ POST /api/webhook
                            ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                      Express Server                              │
-│                     (src/index.js)                               │
+│                  SignalStudio Dashboard                          │
+│              (app.signal-studio.co - Netlify)                    │
 │  ┌────────────────────────────────────────────────────────────┐ │
-│  │  • Webhook validation (secret check)                       │ │
-│  │  • Rate limiting (30 req/min)                              │ │
-│  │  • Request routing                                         │ │
-│  │  • Health check endpoint                                   │ │
+│  │  • Validates webhook secret                               │ │
+│  │  • Checks subscription limits                             │ │
+│  │  • Builds order from strategy config                      │ │
+│  │  • Forwards to Sparky Bot asynchronously                  │ │
 │  └────────────────────────────────────────────────────────────┘ │
 └──────────────────────────┬──────────────────────────────────────┘
-                           │
+                           │ POST /webhook (async forward)
                            ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    Trade Executor                                │
-│                  (src/tradeExecutor.js)                          │
+│                      Sparky Trading Bot                          │
+│                     (VPS - Express.js)                           │
 │  ┌────────────────────────────────────────────────────────────┐ │
-│  │  1. Check existing position                                │ │
-│  │  2. Close if exists                                        │ │
-│  │  3. Calculate position size                                │ │
-│  │  4. Open new position                                      │ │
-│  │  5. Place stop loss                                        │ │
-│  │  6. Place take profit                                      │ │
-│  │  7. Track position                                         │ │
+│  │  • Validates webhook (trusts SignalStudio if user_id)     │ │
+│  │  • Loads user's exchange credentials from Supabase        │ │
+│  │  • Executes trade on exchange                             │ │
+│  │  • Logs to Supabase (positions/trades tables)             │ │
+│  │  • Sends notifications                                    │ │
 │  └────────────────────────────────────────────────────────────┘ │
 └───────────┬────────────────────────────┬────────────────────────┘
             │                            │
-            │                            │
             ▼                            ▼
 ┌──────────────────────────┐   ┌──────────────────────────────────┐
-│   Position Tracker       │   │      Aster API Client            │
-│ (positionTracker.js)     │   │     (asterApi.js)                │
+│   Position Tracker       │   │      Exchange APIs                │
+│ (positionTracker.js)     │   │ (ExchangeFactory.js)             │
 ├──────────────────────────┤   ├──────────────────────────────────┤
-│ • In-memory positions    │   │ • HMAC-SHA256 authentication     │
-│ • Add/Remove/Update      │   │ • Retry logic (3 attempts)       │
-│ • Get summary            │   │ • Exponential backoff            │
-│ • Sync with exchange     │   │ • Place orders                   │
-└──────────────────────────┘   │ • Get positions                  │
-                               │ • Get balance                    │
-                               │ • Close positions                │
+│ • In-memory positions    │   │ • Aster DEX (Crypto)             │
+│ • Add/Remove/Update      │   │ • OANDA (Forex)                  │
+│ • Get summary            │   │ • Tradier (Stocks/Options)       │
+│ • Sync with exchange     │   │ • Lighter DEX (zkSync)           │
+└──────────────────────────┘   │ • Hyperliquid (Perps)            │
                                └────────────┬─────────────────────┘
-                                            │ HTTPS + HMAC
+                                            │ HTTPS
                                             ▼
                                ┌──────────────────────────────────┐
-                               │      Aster DEX API               │
-                               │   (api.aster.finance)            │
+                               │      Exchange APIs               │
+                               │   (Aster, OANDA, Tradier, etc.)  │
                                └──────────────────────────────────┘
 ```
 
 ### SignalStudio Dashboard Linkage
 
-- **Repo:** `c:\Users\mjjoh\TradeFI\tradefi\` (Nuxt 3 + Nuxt UI). The dashboard reads/writes Supabase through `app/utils/supabase.ts`; whenever Supabase credentials change, update that file plus the `.env`.
-- **Shared schema:** TradeFI expects the same tables Sparky manages (`positions`, `trades`, `trade_stats`, `strategies`, `trade_settings_global`, `trade_settings_exchange`, `tradier_option_trades`). Regenerate the SQL snapshots in both repos whenever the schema evolves.
-- **Bot touchpoints:** TradeFI server routes proxy Sparky endpoints for health, positions, and strategy reloads (`/api/sparky/health`, `/api/sparky/positions`, `/api/sparky/strategies/reload`). Operator utilities (`/api/trades/sync`, `/api/trades/fix-pnl`) call back into Sparky/Supabase to reconcile data.
-- **Refresh cadence:** TradeFI auto-refreshes every 30 s to match Sparky’s `positionUpdater`. If Supabase credentials are absent in Sparky, the updater—and therefore the dashboard—will not show live data.
+- **Repo:** `c:\Users\mjjoh\SignalStudio\signal\` (Nuxt 3 + ShadCN UI). The dashboard reads/writes Supabase through `app/utils/supabase.ts`; whenever Supabase credentials change, update that file plus the `.env`.
+- **Shared schema:** SignalStudio expects the same tables Sparky manages (`positions`, `trades`, `trade_stats`, `strategies`, `trade_settings_exchange`, `tradier_option_trades`, `webhook_requests`, `bot_credentials`, `subscriptions`, `notifications`, `notification_preferences`). Keep schema aligned between repos.
+- **Bot touchpoints:** SignalStudio server routes proxy Sparky endpoints for health and positions (`/api/sparky/health`, `/api/sparky/positions`). Trade sync utilities (`/api/trades/sync`) reconcile Supabase data.
+- **Webhook flow:** TradingView alerts go to SignalStudio (`/api/webhook`), which builds orders from strategy configs and forwards to Sparky asynchronously.
+- **Refresh cadence:** SignalStudio auto-refreshes every 30s to match Sparky's `positionUpdater`. If Supabase credentials are absent in Sparky, the updater—and therefore the dashboard—will not show live data.
 
 ## Data Flow
 
@@ -109,21 +107,26 @@ sparky-trading-bot/
 ```
 TradingView Alert
     ↓
-Webhook Received (POST /webhook)
+SignalStudio /api/webhook
     ↓
 [Validate Secret] ──✗─→ Return 401 Unauthorized
     ↓ ✓
-[Validate Fields] ──✗─→ Return 400 Bad Request
-    ↓ ✓
-[Check Existing Position]
+[Build Order from Strategy Config]
     ↓
+Forward to Sparky Bot (async)
+    ↓
+Sparky /webhook
+    ↓
+[Load User's Exchange Credentials]
+    ↓
+[Check Existing Position]
     ├─→ [If exists] → Close Position → Wait 1s
     └─→ [If not] → Continue
     ↓
 [Check Available Margin] ──✗─→ Return Error
     ↓ ✓
 [Calculate Position Size]
-    tradeAmount ÷ price = quantity (leverage is managed directly on the exchange)
+    position_size_usd ÷ price = quantity
     ↓
 [Place Entry Order]
     Market or Limit order
@@ -138,11 +141,11 @@ Webhook Received (POST /webhook)
     Side: Opposite of entry
     reduceOnly: true
     ↓
-[Track Position]
-    Store in PositionTracker
+[Save to Supabase + Track Position]
+    ↓
+[Send Notification]
     ↓
 [Return Success]
-    Response to TradingView
 ```
 
 ### Closing a Position
@@ -162,7 +165,11 @@ Close Signal Received
 [Cancel Stop Loss & Take Profit]
     (If order IDs exist)
     ↓
-[Remove from Tracker]
+[Log Trade to Supabase]
+    ↓
+[Remove from Tracker + Database]
+    ↓
+[Send Notification]
     ↓
 [Return Success]
 ```
@@ -172,23 +179,20 @@ Close Signal Received
 ### `src/index.js` (Main Server)
 - **Purpose**: Express HTTP server, receives webhooks
 - **Key Functions**:
-  - `POST /webhook` - Main webhook endpoint
+  - `POST /webhook` - Main webhook endpoint (receives from SignalStudio or direct)
   - `GET /health` - Health check + status
   - `GET /positions` - View tracked positions
   - `POST /positions/sync` - Sync with exchange
-- **Security**: Rate limiting, secret validation
-- **Startup**: Tests API connection, syncs positions
+- **Security**: Rate limiting, secret validation, multi-tenant credential loading
+- **Startup**: Tests DB connection, initializes credential cache
 
-### `src/asterApi.js` (API Client)
-- **Purpose**: Communicate with Aster DEX
-- **Authentication**: HMAC-SHA256 signatures
+### `src/exchanges/ExchangeFactory.js` (Exchange Factory)
+- **Purpose**: Create exchange API instances dynamically per-user
 - **Key Methods**:
-  - `placeMarketOrder()` - Market execution
-  - `placeStopLoss()` - Protective stop
-  - `placeTakeProfit()` - Profit target
-  - `getPositions()` - Fetch open positions
-  - `getBalance()` - Check available margin
-- **Error Handling**: Retry logic, exponential backoff
+  - `createExchangeForUser()` - Load user's credentials from Supabase, create API instance
+  - `createExchange()` - Create instance from provided config (legacy)
+  - `getSupportedExchanges()` - List of supported exchanges
+- **Supported**: aster, oanda, tradier, tradier_options, lighter, hyperliquid
 
 ### `src/tradeExecutor.js` (Trading Logic)
 - **Purpose**: Execute trading decisions
@@ -196,13 +200,19 @@ Close Signal Received
   - `executeWebhook()` - Main entry point
   - `openPosition()` - Full position opening flow
   - `closePosition()` - Close existing position
-- **Logic**: 
-  1. Validate & check existing
-  2. Close if needed
-  3. Calculate size
-  4. Execute trade
-  5. Set risk management
-  6. Track position
+- **Features**: 
+  - Multi-tenant (uses user_id for all DB operations)
+  - Sends notifications on trade events
+  - Logs to Supabase positions/trades tables
+
+### `src/supabaseClient.js` (Database Client)
+- **Purpose**: All Supabase database operations
+- **Key Functions**:
+  - `logTrade()` - Log completed trade
+  - `savePosition()` - Save/update open position
+  - `removePosition()` - Remove closed position
+  - `getUserExchangeCredentials()` - Load user's exchange API keys (with Redis caching)
+  - `validateWebhookSecret()` - Per-user webhook secret validation (with in-memory cache)
 
 ### `src/positionTracker.js` (State Management)
 - **Purpose**: Track open positions in memory
@@ -212,7 +222,21 @@ Close Signal Received
   - `removePosition()` - Remove closed position
   - `getPosition()` - Get by symbol + exchange
   - `syncWithExchange()` - Reconcile with API
-- **Use Case**: Fast lookups, prevent duplicates
+
+### `src/positionUpdater.js` (Background Service)
+- **Purpose**: Keep position data current
+- **Features**:
+  - Updates prices every 30 seconds
+  - Syncs with exchange every 5 minutes
+  - Detects manually opened/closed positions
+  - Calculates unrealized P&L
+
+### `src/utils/notifications.js` (Notifications)
+- **Purpose**: Create notifications in Supabase
+- **Features**:
+  - Fire-and-forget (never blocks trades)
+  - Redis-cached preferences
+  - Respects user notification settings
 
 ### `src/utils/logger.js` (Logging)
 - **Purpose**: Winston-based logging
@@ -221,16 +245,6 @@ Close Signal Received
   - combined.log (all logs)
   - error.log (errors only)
   - trades.log (trade execution)
-- **Features**: Timestamps, JSON format, rotation
-
-### `src/utils/calculations.js` (Math)
-- **Purpose**: Trading calculations
-- **Functions**:
-  - `calculatePositionSize()` - amount × leverage ÷ price
-  - `calculateStopLoss()` - Entry ± percent
-  - `calculateTakeProfit()` - Entry ± percent
-  - `getOppositeSide()` - BUY ↔ SELL
-  - `hasSufficientMargin()` - Risk check
 
 ## Configuration Files
 
@@ -240,23 +254,30 @@ NODE_ENV=production
 PORT=3000
 LOG_LEVEL=info
 
+# Required for multi-tenant mode
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=your_service_role_key_here
-SUPABASE_ANON_KEY=your_anon_key_here
 
+# Optional (for caching)
+REDIS_URL=redis://...
+
+# Legacy (optional - for backward compatibility)
 WEBHOOK_SECRET=your_secure_random_string
-
-ASTER_API_KEY=...
-ASTER_API_SECRET=...
-OANDA_API_KEY=...
-TRADIER_TOKEN=...
-LIGHTER_API_KEY=...
 ```
 
 ### `config.json` (Trading Parameters)
+
+In **multi-tenant mode**, config.json can be empty or minimal:
+```json
+{}
+```
+
+All credentials come from SignalStudio's `bot_credentials` table.
+
+For **legacy/testing mode**:
 ```json
 {
-  "webhookSecret": "same_as_env_file",
+  "webhookSecret": "your_webhook_secret",
   "aster": {
     "apiUrl": "https://fapi.asterdex.com",
     "apiKey": "YOUR_API_KEY",
@@ -264,36 +285,10 @@ LIGHTER_API_KEY=...
     "tradeAmount": 600
   },
   "oanda": {
-    "accountId": "101-001-28692540-001",
-    "accessToken": "YOUR_OANDA_TOKEN",
+    "accountId": "YOUR_ACCOUNT_ID",
+    "accessToken": "YOUR_TOKEN",
     "environment": "practice",
     "tradeAmount": 10000
-  },
-  "tradier": {
-    "accountId": "VA55402267",
-    "accessToken": "YOUR_TRADIER_TOKEN",
-    "environment": "sandbox",
-    "tradeAmount": 2000
-  },
-  "tradierOptions": {
-    "accountId": "VA55402267",
-    "accessToken": "YOUR_TRADIER_TOKEN",
-    "environment": "sandbox"
-  },
-  "hyperliquid": {
-    "apiKey": "YOUR_WALLET",
-    "privateKey": "YOUR_PRIVATE_KEY",
-    "baseUrl": "https://api.hyperliquid.xyz",
-    "isTestnet": false,
-    "tradeAmount": 300
-  },
-  "lighter": {
-    "apiKey": "YOUR_LIGHTER_API_KEY",
-    "privateKey": "YOUR_ETH_PRIVATE_KEY",
-    "accountIndex": 0,
-    "apiKeyIndex": 2,
-    "baseUrl": "https://mainnet.zklighter.elliot.ai",
-    "tradeAmount": 500
   },
   "riskManagement": {
     "maxPositions": 20
@@ -304,10 +299,10 @@ LIGHTER_API_KEY=...
 ### `ecosystem.config.js` (PM2)
 ```javascript
 {
-  name: 'aster-bot',
+  name: 'sparky-bot',
   script: './src/index.js',
-  autorestart: true,            # Auto-restart on crash
-  max_memory_restart: '500M',   # Restart if >500MB
+  autorestart: true,
+  max_memory_restart: '500M',
   error_file: './logs/pm2-error.log',
   out_file: './logs/pm2-out.log'
 }
@@ -320,25 +315,27 @@ LIGHTER_API_KEY=...
 │         Security Layers              │
 ├──────────────────────────────────────┤
 │ 1. Webhook Secret Validation         │
-│    ├─ Every request must include     │
-│    └─ Matches configured secret      │
+│    ├─ Per-user secrets from Supabase │
+│    ├─ In-memory cache (30s refresh)  │
+│    └─ Trusts SignalStudio if user_id │
 ├──────────────────────────────────────┤
 │ 2. Rate Limiting                     │
 │    ├─ Max 30 requests/minute         │
 │    └─ Prevents abuse                 │
 ├──────────────────────────────────────┤
-│ 3. HMAC Authentication (Aster)       │
-│    ├─ API Key + Secret               │
-│    ├─ Timestamp + Signature          │
-│    └─ Prevents replay attacks        │
+│ 3. Multi-Tenant Data Isolation       │
+│    ├─ All data tagged with user_id   │
+│    ├─ RLS policies in Supabase       │
+│    └─ Credentials per-user           │
 ├──────────────────────────────────────┤
-│ 4. Environment Variables             │
+│ 4. Exchange Authentication           │
+│    ├─ HMAC-SHA256 (Aster)            │
+│    ├─ Bearer tokens (OANDA, Tradier) │
+│    └─ Credentials from Supabase      │
+├──────────────────────────────────────┤
+│ 5. Environment Variables             │
 │    ├─ Secrets in .env (not git)      │
 │    └─ File permissions: 600          │
-├──────────────────────────────────────┤
-│ 5. Firewall (Production)             │
-│    ├─ Only expose necessary ports    │
-│    └─ UFW rules                      │
 ├──────────────────────────────────────┤
 │ 6. SSL/TLS (Production)              │
 │    ├─ HTTPS via Nginx                │
@@ -346,19 +343,25 @@ LIGHTER_API_KEY=...
 └──────────────────────────────────────┘
 ```
 
-## Scaling & Performance
+## Deployment Targets
 
-### Current Design (Single Instance)
-- ✅ Handles 30 webhooks/minute
-- ✅ In-memory position tracking
-- ✅ Sequential order execution
-- ✅ Suitable for most use cases
+### Development
+```
+Local machine
+  ├─ npm run dev (nodemon)
+  ├─ Environment: development
+  └─ Logs to console + files
+```
 
-### Future Scaling Options
-- 🔄 Redis for position tracking (multi-instance)
-- 🔄 Queue system (Bull/BullMQ) for order processing
-- 🔄 Database (PostgreSQL) for trade history
-- 🔄 Horizontal scaling with load balancer
+### Production
+```
+DigitalOcean Droplet (or VPS)
+  ├─ PM2 process manager
+  ├─ Nginx reverse proxy
+  ├─ SSL/TLS (Let's Encrypt)
+  ├─ UFW firewall
+  └─ Automatic restarts
+```
 
 ## Monitoring Points
 
@@ -380,71 +383,6 @@ LIGHTER_API_KEY=...
    - Memory consumption
    - Restart count
 
-## Deployment Targets
-
-### Development
-```
-Local machine
-  ├─ npm run dev (nodemon)
-  ├─ Environment: development
-  └─ Logs to console + files
-```
-
-### Production
-```
-DigitalOcean Droplet
-  ├─ PM2 process manager
-  ├─ Nginx reverse proxy
-  ├─ SSL/TLS (Let's Encrypt)
-  ├─ UFW firewall
-  └─ Automatic restarts
-```
-
-## Testing Strategy
-
-### Phase 1: Local Testing
-- ✅ Test webhook validation
-- ✅ Test API connection
-- ✅ Mock trades (dry run)
-- ✅ Use test script
-
-### Phase 2: Paper Trading
-- ✅ Small amounts ($10-20)
-- ✅ Low leverage (2-3x)
-- ✅ Monitor for 1 week
-- ✅ Verify all features
-
-### Phase 3: Production
-- ✅ Gradually increase size
-- ✅ Monitor closely
-- ✅ Review logs daily
-- ✅ Track performance
-
-## Dependencies
-
-### Production
-```json
-{
-  "express": "^4.18.2",          # Web server
-  "axios": "^1.6.0",             # HTTP client
-  "dotenv": "^16.3.1",           # Environment vars
-  "winston": "^3.11.0",          # Logging
-  "express-rate-limit": "^7.1.5" # Rate limiting
-}
-```
-
-### Development
-```json
-{
-  "nodemon": "^3.0.1"            # Auto-reload
-}
-```
-
-### Global (for deployment)
-```
-pm2                              # Process manager
-```
-
 ## Error Recovery
 
 ### Automatic Recovery
@@ -454,14 +392,13 @@ pm2                              # Process manager
 - ✅ High memory → PM2 restart at 500MB
 
 ### Manual Recovery
-- 📝 Check logs: `pm2 logs`
-- 🔄 Restart: `pm2 restart aster-bot`
+- 📝 Check logs: `pm2 logs sparky-bot`
+- 🔄 Restart: `pm2 restart sparky-bot`
 - 🔄 Sync positions: `POST /positions/sync`
 - 📊 Health check: `GET /health`
 
 ---
 
-**Last Updated**: 2024
-**Version**: 1.0.0
+**Last Updated**: December 2025
+**Version**: 1.1.0
 **Status**: Production Ready ✅
-

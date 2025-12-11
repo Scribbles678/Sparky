@@ -200,3 +200,8 @@ Check logs for:
 ✅ Created aster executor for user your-user-uuid
 ```
 
+---
+
+**Version:** 1.1  
+**Last Updated:** December 2025
+

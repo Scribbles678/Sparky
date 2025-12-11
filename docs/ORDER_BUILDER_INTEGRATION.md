@@ -1,37 +1,33 @@
-# Sparky Bot - Order Builder Integration Changes
+# Sparky Bot - Order Builder Integration
 
 ## Summary
 
-Sparky bot now receives **pre-built orders** from SignalStudio instead of building them itself. SignalStudio handles strategy configuration lookup and order building, then forwards complete orders to Sparky for execution.
+Sparky bot receives **pre-built orders** from SignalStudio instead of building them itself. SignalStudio handles strategy configuration lookup and order building, then forwards complete orders to Sparky for execution.
 
 **Webhook Flow:**
 - TradingView → SignalStudio (`https://app.signal-studio.co/api/webhook`)
 - SignalStudio validates secret, builds order, forwards to Sparky Bot **asynchronously**
 - Sparky Bot receives pre-built order and executes trade
 
-## Changes Made
+## How It Works
 
-### 1. Webhook Handler Updates ✅
+### 1. Webhook Handler
 **File:** `src/index.js`
 
-- Added comment noting that webhook now receives pre-built orders from SignalStudio
-- Added logging to identify source (SignalStudio vs Direct webhook)
+- Receives pre-built orders from SignalStudio
+- Logs source (SignalStudio vs Direct webhook) via `user_id` presence
 - **Per-user secret validation**: Validates webhook secrets from Supabase `bot_credentials` table
 - **In-memory cache**: Caches webhook secrets for 30 seconds (refreshes automatically)
 - **Fallback**: Falls back to legacy `WEBHOOK_SECRET` if Supabase validation fails
-- No logic changes to order processing - webhook handler already worked correctly
 
-### 2. Position Sizing Update ✅
+### 2. Position Sizing
 **File:** `src/tradeExecutor.js`
 
-**Before:**
-```javascript
-// Always used config.json
-const exchangeTradeAmount = exchangeConfig.tradeAmount || 600;
-const finalTradeAmount = exchangeTradeAmount * positionMultiplier;
-```
+Position size is determined by priority:
 
-**After:**
+1. **`position_size_usd` from alert** (highest priority) - SignalStudio pre-built orders
+2. **`config.json` fallback** - For direct webhooks or backward compatibility
+
 ```javascript
 // Priority: alertData.position_size_usd > config.json
 if (alertData.position_size_usd || alertData.positionSizeUsd) {
@@ -45,33 +41,21 @@ if (alertData.position_size_usd || alertData.positionSizeUsd) {
 }
 ```
 
-**Why:** SignalStudio's OrderBuilder sends `position_size_usd` in the order. Sparky needs to use this value instead of ignoring it and using config.json.
+### 3. Strategy Validation (Optional)
 
-### 3. Alert Data Extraction ✅
-**File:** `src/tradeExecutor.js`
-
-- Added `position_size_usd` and `positionSizeUsd` to destructured alertData
-- Supports both snake_case and camelCase (for flexibility)
-
-## What Still Works
-
-### Strategy Validation (Optional)
-Sparky still validates strategies if provided in the alert:
+Sparky validates strategies if provided in the alert:
 - Checks if strategy exists
 - Checks if strategy is active
-- Gets strategy_id for database tracking
+- Gets `strategy_id` for database tracking
 
-**Note:** This is optional - if strategy is not provided, trade still executes (for backward compatibility).
+**Note:** This is optional - if strategy is not provided, trade still executes.
 
-### Direct Webhooks (Backward Compatibility)
-Sparky still supports direct webhooks that don't go through SignalStudio:
-- Uses config.json for position sizing (fallback)
-- Uses alert data for TP/SL if provided
-- Works exactly as before
+---
 
 ## Order Flow
 
-### New Flow (SignalStudio → Sparky)
+### Recommended Flow (SignalStudio → Sparky)
+
 ```
 TradingView Alert (Simple)
     ↓
@@ -83,7 +67,7 @@ OrderBuilder.buildOrder()
   - Merges configuration
   - Builds complete order
     ↓
-Forwards to Sparky Bot
+Forwards to Sparky Bot (async)
   {
     exchange: "aster",
     action: "BUY",
@@ -92,21 +76,25 @@ Forwards to Sparky Bot
     position_size_usd: 100,  ← Sparky uses this
     stop_loss_percent: 2.0,
     take_profit_percent: 4.0,
-    strategy_id: "uuid"
+    strategy_id: "uuid",
+    user_id: "user-uuid"
   }
     ↓
 Sparky tradeExecutor
   - Uses position_size_usd from order
   - Executes trade
   - Tracks strategy_id
+  - Logs to user's trades
 ```
 
 ### Legacy Flow (Direct Webhook)
+
 ```
 TradingView Alert (Full)
     ↓
 Sparky Bot (Direct)
   {
+    secret: "webhook_secret",
     exchange: "aster",
     action: "BUY",
     symbol: "BTCUSDT",
@@ -119,13 +107,36 @@ Sparky tradeExecutor
   - Executes trade
 ```
 
+---
+
+## Pre-Built Order Fields
+
+SignalStudio sends these fields in pre-built orders:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `user_id` | UUID | User identifier (for multi-tenant) |
+| `exchange` | string | Exchange name (aster, oanda, tradier) |
+| `action` | string | BUY, SELL, or CLOSE |
+| `symbol` | string | Trading symbol |
+| `order_type` | string | market or limit |
+| `position_size_usd` | number | Position size in USD |
+| `stop_loss_percent` | number | Stop loss percentage |
+| `take_profit_percent` | number | Take profit percentage |
+| `strategy_id` | UUID | Strategy reference |
+| `strategy` | string | Strategy name (for logging) |
+| `is_simple_alert` | boolean | Whether built from simple alert |
+
+---
+
 ## Testing
 
 ### Test Pre-Built Orders
-1. Send simple alert from TradingView:
+
+1. Send simple alert from TradingView to SignalStudio:
    ```json
    {
-     "secret": "...",
+     "secret": "your-webhook-secret",
      "strategy": "my_strategy",
      "action": "BUY",
      "symbol": "BTCUSDT"
@@ -135,11 +146,12 @@ Sparky tradeExecutor
 3. Sparky receives order and uses `position_size_usd: 100`
 4. Trade executes with correct position size
 
-### Test Backward Compatibility
+### Test Direct Webhook (Backward Compatibility)
+
 1. Send direct webhook to Sparky:
    ```json
    {
-     "secret": "...",
+     "secret": "your-webhook-secret",
      "exchange": "aster",
      "action": "BUY",
      "symbol": "BTCUSDT"
@@ -148,12 +160,21 @@ Sparky tradeExecutor
 2. Sparky uses config.json for position size (fallback)
 3. Trade executes as before
 
-## Status: ✅ Complete
+---
 
-All changes are minimal and maintain backward compatibility. Sparky now:
-- ✅ Uses position_size_usd from SignalStudio orders
-- ✅ Falls back to config.json for direct webhooks
-- ✅ Still validates strategies (optional)
-- ✅ Still tracks strategy_id for analytics
+## Features
+
+Sparky's Order Builder integration:
+
+- ✅ Uses `position_size_usd` from SignalStudio orders
+- ✅ Falls back to `config.json` for direct webhooks
+- ✅ Validates strategies (optional)
+- ✅ Tracks `strategy_id` for analytics
 - ✅ Works with both new and legacy webhook formats
+- ✅ Multi-tenant support via `user_id`
+
+---
+
+**Version:** 1.1  
+**Last Updated:** December 2025
 

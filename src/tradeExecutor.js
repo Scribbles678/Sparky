@@ -73,8 +73,12 @@ class TradeExecutor {
         logger.warn('⚠️ No userId provided - trade may not be visible in dashboard!');
       }
 
-      // Validate strategy if provided
-      if (strategy) {
+      // Check if this is a pre-built order from SignalStudio
+      // SignalStudio orders have user_id AND position_size_usd (already validated)
+      const isSignalStudioOrder = alertData.userId && (alertData.position_size_usd || alertData.positionSizeUsd);
+      
+      // Validate strategy if provided (skip for SignalStudio pre-built orders - already validated)
+      if (strategy && !isSignalStudioOrder) {
         const strategyInfo = this.strategyManager.validateStrategy(strategy);
         if (!strategyInfo) {
           return {
@@ -84,6 +88,8 @@ class TradeExecutor {
           };
         }
         logger.info(`📊 Executing trade with strategy: ${strategy}`);
+      } else if (strategy && isSignalStudioOrder) {
+        logger.info(`📊 Executing SignalStudio pre-built order for strategy: ${strategy} (validation skipped - trusted source)`);
       }
 
       // Route to appropriate handler

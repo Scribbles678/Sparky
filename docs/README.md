@@ -52,11 +52,13 @@ Supported Exchanges:
 
 - [docs/MULTI_TENANT.md](docs/MULTI_TENANT.md) – **Multi-tenant credential loading from SignalStudio**
 - [docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md) – **Server-side notifications system**
-- [docs/EXCHANGES.md](docs/EXCHANGES.md) – exchange-specific auth, sizing, and quirks.
-- [docs/STRATEGIES.md](docs/STRATEGIES.md) – strategy metadata, trailing stops, options.
-- [docs/TRADINGVIEW.md](docs/TRADINGVIEW.md) – webhook payload expectations + troubleshooting.
+- [docs/ORDER_BUILDER_INTEGRATION.md](docs/ORDER_BUILDER_INTEGRATION.md) – **How SignalStudio builds orders for Sparky**
+- [docs/EXCHANGES.md](docs/EXCHANGES.md) – Exchange-specific auth, sizing, and quirks
+- [docs/PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md) – Project structure overview
+- [docs/STRATEGIES.md](docs/STRATEGIES.md) – Strategy metadata, trailing stops, options
+- [docs/TRADINGVIEW.md](docs/TRADINGVIEW.md) – Webhook payload expectations + troubleshooting
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) – VPS deployment guide
-- Supabase/SQL migrations live in [`schema/`](schema/).
+- Supabase/SQL migrations live in [`docs/schema/`](docs/schema/).
 
 > **Whenever you change behavior or schema, update the related markdown or SQL in this repo.**  
 > This repository is the single source of truth—no private Notion/Google Docs.
@@ -902,17 +904,17 @@ sparky-bot/
 
 ## Future Enhancements
 
-- [ ] Web dashboard for position monitoring
+- [x] Web dashboard for position monitoring (SignalStudio Dashboard - deployed!)
 - [ ] Telegram bot integration for trade alerts
-- [ ] Database for trade history and analytics
+- [x] Database for trade history and analytics (Supabase - implemented)
 - [ ] Backtesting mode with historical data
-- [ ] Multiple account support
-- [ ] Dynamic position sizing based on account balance
-- [ ] Trailing stop losses
+- [x] Multiple account support (Multi-tenant per-user credentials)
+- [x] Dynamic position sizing based on account balance (Strategy configs)
+- [x] Trailing stops (OANDA support)
 - [ ] Break-even automation after TP1
 - [ ] Multiple TP levels (TP1, TP2, TP3)
 - [ ] ATR-based stop loss calculation
-- [ ] Webhook signature verification (HMAC)
+- [x] Webhook signature verification (Per-user secrets from Supabase)
 
 ## Support & Documentation
 
@@ -946,3 +948,8 @@ MIT License - see LICENSE file for details
 - Use at your own risk
 
 **Remember:** Leverage amplifies both gains AND losses. Always use appropriate stop losses and never risk more than you can afford to lose.
+
+---
+
+**Version:** 1.1  
+**Last Updated:** December 2025

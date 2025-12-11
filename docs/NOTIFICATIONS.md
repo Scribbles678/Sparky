@@ -227,3 +227,8 @@ SELECT * FROM notification_preferences WHERE user_id = $1;
 2. Preference cache TTL is 5 min - may need to wait
 3. Check Redis is returning cached preferences
 
+---
+
+**Version:** 1.1  
+**Last Updated:** December 2025
+
