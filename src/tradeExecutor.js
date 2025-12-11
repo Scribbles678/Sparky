@@ -517,7 +517,7 @@ class TradeExecutor {
           strategyId = strategyInfo?.id || null;
         }
 
-        await logTrade({
+        const tradeResult = await logTrade({
           // MULTI-TENANT: user_id is REQUIRED for dashboard visibility
           userId: userId,
           symbol,
@@ -541,6 +541,36 @@ class TradeExecutor {
           exchange: this.exchange,
           strategyId: strategyId,
         });
+
+        // =====================================================================
+        // COPY TRADING: Update copied trade P&L if this was a copied trade
+        // =====================================================================
+        // If this trade was executed as part of copy trading, update the
+        // copied_trades table with P&L for billing purposes.
+        // =====================================================================
+        if (alertData && alertData.source === 'copy_trading' && tradeResult && tradeResult.data) {
+          const { updateCopiedTradePnl, updateCopiedTradeFollowerId } = require('./utils/copyTrading');
+          const tradeId = tradeResult.data[0]?.id || null;
+          if (tradeId) {
+            // Update follower_trade_id in copied_trades
+            if (alertData.copy_relationship_id) {
+              updateCopiedTradeFollowerId(alertData.copy_relationship_id, tradeId).catch(err => {
+                logger.debug('Failed to update copied trade follower_trade_id', err);
+              });
+            }
+            
+            // Update P&L
+            updateCopiedTradePnl(tradeId, {
+              pnl_usd: pnlUsd,
+              pnl_percent: pnlPercent,
+              is_winner: pnlUsd > 0,
+              exit_time: new Date().toISOString(),
+              strategyId: strategyId
+            }).catch(err => {
+              logger.debug('Failed to update copied trade P&L', err);
+            });
+          }
+        }
 
         // Update strategy performance metrics
         if (strategy) {

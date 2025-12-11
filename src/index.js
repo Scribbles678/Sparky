@@ -702,6 +702,38 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
     const duration = Date.now() - startTime;
     logger.info(`Webhook processed successfully in ${duration}ms`, result);
 
+    // =========================================================================
+    // COPY TRADING: Fan-out to followers (if this is a leader's trade)
+    // =========================================================================
+    // If the trade was successful and came from an AI strategy, check if
+    // there are followers who should copy this trade.
+    // =========================================================================
+    if (result.success && alertData.strategy_id && alertData.source === 'ai_engine_v1') {
+      // Fan-out asynchronously (don't block response)
+      const { fanOutToFollowers } = require('./utils/copyTrading');
+      fanOutToFollowers({
+        userId: userId,
+        strategyId: alertData.strategy_id,
+        exchange: exchange,
+        symbol: alertData.symbol,
+        action: alertData.action,
+        positionSizeUsd: alertData.position_size_usd || alertData.positionSizeUsd || 0,
+        result: result,
+        originalTradeId: result.tradeId || null // May not be available immediately
+      }).then(fanOutResult => {
+        if (fanOutResult.success) {
+          logger.info(`📤 Copy trading fan-out: ${fanOutResult.followersSucceeded}/${fanOutResult.followersProcessed} followers executed`, {
+            strategyId: alertData.strategy_id,
+            symbol: alertData.symbol
+          });
+        } else {
+          logger.warn('Copy trading fan-out failed', fanOutResult);
+        }
+      }).catch(err => {
+        logger.logError('Copy trading fan-out error', err);
+      });
+    }
+
     // Log webhook request to database (async, fire-and-forget)
     // This is needed for limit tracking and analytics
     if (userId) {
