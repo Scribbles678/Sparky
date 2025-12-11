@@ -348,6 +348,42 @@ function notifyBotReconnected(userId) {
   });
 }
 
+// ============================================================================
+// WEBHOOK LIMIT NOTIFICATIONS
+// ============================================================================
+
+/**
+ * Webhook limit warning (at 80%)
+ */
+function notifyWebhookLimitWarning(userId, currentCount, limit, plan, percentUsed, resetDate) {
+  const resetDateStr = resetDate ? resetDate.toLocaleDateString() : 'end of month';
+  
+  return createNotification({
+    userId,
+    type: 'warning',
+    title: 'Webhook Limit Warning',
+    message: `You've used ${percentUsed}% of your monthly webhooks (${currentCount}/${limit}). Consider upgrading or limit resets ${resetDateStr}.`,
+    metadata: { limitType: 'webhook_warning', current: currentCount, limit, plan, percentUsed },
+    preferenceKey: 'notify_webhook_limit_warning',
+  });
+}
+
+/**
+ * Webhook limit exceeded
+ */
+function notifyWebhookLimitReached(userId, currentCount, limit, plan) {
+  const resetDate = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1);
+  
+  return createNotification({
+    userId,
+    type: 'limit',
+    title: 'Webhook Limit Reached',
+    message: `You've reached your monthly webhook limit (${currentCount}/${limit}). Upgrade your plan or wait until ${resetDate.toLocaleDateString()} for the limit to reset.`,
+    metadata: { limitType: 'webhook', current: currentCount, limit, plan, resetDate: resetDate.toISOString() },
+    preferenceKey: 'notify_webhook_limit_reached',
+  });
+}
+
 module.exports = {
   createNotification,
   getUserPreferences,
@@ -367,5 +403,8 @@ module.exports = {
   notifyInvalidCredentials,
   notifyBotDisconnected,
   notifyBotReconnected,
+  // Webhook limits
+  notifyWebhookLimitWarning,
+  notifyWebhookLimitReached,
 };
 

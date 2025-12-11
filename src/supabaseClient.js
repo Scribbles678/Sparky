@@ -473,25 +473,35 @@ async function getTradeSettingsGlobal() {
 
 /**
  * Fetch exchange-specific trade settings (or defaults)
+ * MULTI-TENANT: Now requires userId to fetch user-specific settings
  * @param {string} exchange
+ * @param {string} userId - User ID (required for multi-tenant)
  * @returns {Promise<Object>}
  */
-async function getExchangeTradeSettings(exchange) {
+async function getExchangeTradeSettings(exchange, userId = null) {
   const defaults = buildDefaultExchangeSettings(exchange);
 
   if (!supabase) {
     return { ...defaults };
   }
 
+  // If no userId provided, return defaults (legacy mode)
+  if (!userId) {
+    console.warn(`⚠️ getExchangeTradeSettings called without userId for ${exchange} - returning defaults`);
+    return { ...defaults };
+  }
+
   try {
-    const { data, error } = await supabase
+    let query = supabase
       .from('trade_settings_exchange')
       .select('*')
       .eq('exchange', exchange)
-      .maybeSingle();
+      .eq('user_id', userId); // MULTI-TENANT: Filter by user_id
+
+    const { data, error } = await query.maybeSingle();
 
     if (error) {
-      console.error(`❌ Error fetching trade settings for ${exchange}:`, error);
+      console.error(`❌ Error fetching trade settings for ${exchange} (user ${userId}):`, error);
       return { ...defaults };
     }
 
@@ -506,7 +516,7 @@ async function getExchangeTradeSettings(exchange) {
       extra_settings: data.extra_settings || {},
     };
   } catch (error) {
-    console.error(`❌ Exception fetching trade settings for ${exchange}:`, error);
+    console.error(`❌ Exception fetching trade settings for ${exchange} (user ${userId}):`, error);
     return { ...defaults };
   }
 }
@@ -781,6 +791,47 @@ function parseJsonArray(value, fallback) {
 }
 
 /**
+ * Log webhook request to database
+ * Used for limit tracking and analytics
+ * @param {Object} webhookData - Webhook request data
+ * @returns {Promise<Object>} - Result from Supabase
+ */
+async function logWebhookRequest(webhookData) {
+  if (!supabase) {
+    return { error: 'Supabase not configured' };
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('webhook_requests')
+      .insert({
+        user_id: webhookData.userId,
+        webhook_secret: webhookData.webhookSecret,
+        exchange: webhookData.exchange || 'unknown',
+        action: webhookData.action || 'unknown',
+        symbol: webhookData.symbol || 'unknown',
+        strategy_id: webhookData.strategyId || null,
+        payload: webhookData.payload || {},
+        status: webhookData.status || 'pending',
+        error_message: webhookData.errorMessage || null,
+        processed_at: webhookData.status === 'success' ? new Date().toISOString() : null,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('❌ Error logging webhook request:', error);
+      return { error };
+    }
+
+    return { data };
+  } catch (error) {
+    console.error('❌ Exception logging webhook request:', error);
+    return { error };
+  }
+}
+
+/**
  * Test database connection
  * @returns {Promise<Boolean>} - True if connected
  */
@@ -826,6 +877,7 @@ module.exports = {
   saveOptionTrade,
   updateOptionTrade,
   getOptionTradesByStatus,
+  logWebhookRequest,  // NEW: Log webhook requests for limit tracking
   testConnection
 };
 

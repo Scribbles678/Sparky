@@ -22,6 +22,9 @@ const {
   refreshCredentialCache,
 } = require('./supabaseClient');
 const { notifyInvalidCredentials, notifyTradeFailed } = require('./utils/notifications');
+const { checkWebhookLimit, invalidateWebhookCountCache, cleanupOldMonthCaches } = require('./utils/webhookLimits');
+const { checkRiskLimits } = require('./utils/riskLimits');
+const { getExchangeTradeSettings } = require('./supabaseClient');
 
 // ==================== Configuration ====================
 
@@ -514,6 +517,103 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
     });
 
     // =========================================================================
+    // WEBHOOK LIMIT CHECK: Check monthly subscription limits
+    // =========================================================================
+    // Only check limits if we have a userId (multi-tenant mode)
+    // Legacy webhooks without userId bypass limit checks
+    // =========================================================================
+    if (userId) {
+      try {
+        const limitCheck = await checkWebhookLimit(userId);
+        
+        if (!limitCheck.allowed) {
+          logger.warn('Webhook rejected: limit exceeded', {
+            userId,
+            current: limitCheck.current,
+            limit: limitCheck.limit,
+            plan: limitCheck.plan,
+          });
+          
+          return res.status(429).json({
+            success: false,
+            error: 'Webhook limit exceeded',
+            message: limitCheck.reason || `Monthly webhook limit exceeded: ${limitCheck.current}/${limitCheck.limit}`,
+            data: {
+              current: limitCheck.current,
+              limit: limitCheck.limit,
+              plan: limitCheck.plan,
+              resetDate: new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1).toISOString(),
+            },
+          });
+        }
+        
+        logger.debug('Webhook limit check passed', {
+          userId,
+          current: limitCheck.current,
+          limit: limitCheck.limit,
+          plan: limitCheck.plan,
+        });
+      } catch (limitError) {
+        // On error, log but allow webhook (graceful degradation)
+        logger.warn('Webhook limit check failed, allowing webhook (graceful degradation)', {
+          userId,
+          error: limitError.message,
+        });
+      }
+    }
+
+    // =========================================================================
+    // RISK LIMIT CHECK: Check weekly trade/loss limits from Trade Settings
+    // =========================================================================
+    // Only check limits if we have a userId (multi-tenant mode)
+    // Legacy webhooks without userId bypass risk limit checks
+    // =========================================================================
+    if (userId) {
+      try {
+        // Load exchange trade settings (with caching)
+        const exchangeSettings = await getExchangeTradeSettings(exchange, userId);
+        
+        // Check risk limits (max trades per week, max loss per week)
+        const riskCheck = await checkRiskLimits(userId, exchange, exchangeSettings);
+        
+        if (!riskCheck.allowed) {
+          logger.warn('Trade rejected: risk limit exceeded', {
+            userId,
+            exchange,
+            limitType: riskCheck.limitType,
+            current: riskCheck.current,
+            limit: riskCheck.limit,
+          });
+          
+          return res.status(429).json({
+            success: false,
+            error: 'Risk limit exceeded',
+            message: riskCheck.reason,
+            data: {
+              limitType: riskCheck.limitType,
+              current: riskCheck.current,
+              limit: riskCheck.limit,
+            },
+          });
+        }
+        
+        logger.debug('Risk limit check passed', {
+          userId,
+          exchange,
+          maxTradesPerWeek: exchangeSettings.max_trades_per_week || 'unlimited',
+          maxLossPerWeek: exchangeSettings.max_loss_per_week_usd || 'unlimited',
+        });
+      } catch (riskError) {
+        // On error, log but allow webhook (graceful degradation)
+        logger.warn('Risk limit check failed, allowing webhook (graceful degradation)', {
+          userId,
+          exchange,
+          error: riskError.message,
+        });
+      }
+    }
+
+    // =========================================================================
     // MULTI-TENANT: Create exchange API with user's credentials
     // =========================================================================
     // For multi-tenant operation, each user's API credentials are stored in
@@ -559,6 +659,28 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
 
     const duration = Date.now() - startTime;
     logger.info(`Webhook processed successfully in ${duration}ms`, result);
+
+    // Log webhook request to database (async, fire-and-forget)
+    // This is needed for limit tracking and analytics
+    if (userId) {
+      const { logWebhookRequest } = require('./supabaseClient');
+      logWebhookRequest({
+        userId,
+        webhookSecret: alertData.secret,
+        exchange: exchange,
+        action: alertData.action,
+        symbol: alertData.symbol,
+        strategyId: alertData.strategy_id || null,
+        payload: alertData,
+        status: result.success ? 'success' : 'failed',
+        errorMessage: result.success ? null : result.message,
+      }).then(() => {
+        // Invalidate cache after logging so next check sees updated count
+        invalidateWebhookCountCache(userId);
+      }).catch(err => {
+        logger.debug('[Webhook] Failed to log webhook request:', err.message);
+      });
+    }
 
     res.json({
       success: true,
@@ -757,6 +879,18 @@ async function bootstrap() {
         logger.warn(`⚠️  Failed to start ${name} options monitor: ${error.message}`);
       }
     });
+
+    // Clean up old month caches on startup and set up periodic cleanup
+    try {
+      cleanupOldMonthCaches();
+      // Run cleanup every hour to catch month transitions
+      setInterval(() => {
+        cleanupOldMonthCaches();
+      }, 3600000); // 1 hour
+      logger.info('✅ Webhook limit cache cleanup scheduled (runs hourly)');
+    } catch (error) {
+      logger.warn('⚠️  Failed to setup cache cleanup:', error.message);
+    }
   });
 }
 
