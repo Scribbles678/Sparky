@@ -1,45 +1,49 @@
--- Table: public.positions
+create table public.positions (
+  id uuid not null default gen_random_uuid (),
+  created_at timestamp with time zone null default now(),
+  updated_at timestamp with time zone null default now(),
+  symbol character varying(20) not null,
+  side character varying(10) not null,
+  entry_price numeric(20, 8) not null,
+  entry_time timestamp with time zone not null,
+  quantity numeric(20, 8) not null,
+  position_size_usd numeric(20, 2) not null,
+  stop_loss_price numeric(20, 8) null,
+  take_profit_price numeric(20, 8) null,
+  stop_loss_percent numeric(10, 4) null,
+  take_profit_percent numeric(10, 4) null,
+  entry_order_id character varying(100) null,
+  stop_loss_order_id character varying(100) null,
+  take_profit_order_id character varying(100) null,
+  current_price numeric(20, 8) null,
+  unrealized_pnl_usd numeric(20, 4) null,
+  unrealized_pnl_percent numeric(10, 4) null,
+  last_price_update timestamp with time zone null,
+  notes text null,
+  asset_class public.asset_class_type null,
+  strategy_id uuid null,
+  exchange text null,
+  user_id uuid null,
+  constraint positions_pkey primary key (id),
+  constraint positions_user_symbol_unique unique (user_id, symbol),
+  constraint positions_strategy_id_fkey foreign KEY (strategy_id) references strategies (id),
+  constraint positions_user_id_fkey foreign KEY (user_id) references auth.users (id) on delete CASCADE
+) TABLESPACE pg_default;
 
-CREATE TABLE IF NOT EXISTS public.positions (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  created_at timestamp with time zone DEFAULT now(),
-  updated_at timestamp with time zone DEFAULT now(),
-  symbol character varying(20) NOT NULL,
-  side character varying(10) NOT NULL,
-  entry_price numeric(20, 8) NOT NULL,
-  entry_time timestamp with time zone NOT NULL,
-  quantity numeric(20, 8) NOT NULL,
-  position_size_usd numeric(20, 2) NOT NULL,
-  stop_loss_price numeric(20, 8),
-  take_profit_price numeric(20, 8),
-  stop_loss_percent numeric(10, 4),
-  take_profit_percent numeric(10, 4),
-  entry_order_id character varying(100),
-  stop_loss_order_id character varying(100),
-  take_profit_order_id character varying(100),
-  current_price numeric(20, 8),
-  unrealized_pnl_usd numeric(20, 4),
-  unrealized_pnl_percent numeric(10, 4),
-  last_price_update timestamp with time zone,
-  notes text,
-  asset_class public.asset_class_type,
-  strategy_id uuid REFERENCES strategies(id),
-  exchange text,
-  CONSTRAINT positions_symbol_key UNIQUE (symbol)
-);
+create index IF not exists idx_positions_exchange on public.positions using btree (exchange) TABLESPACE pg_default;
 
-CREATE INDEX IF NOT EXISTS idx_positions_exchange
-  ON public.positions (exchange);
+create index IF not exists idx_positions_user_id on public.positions using btree (user_id) TABLESPACE pg_default;
 
-CREATE INDEX IF NOT EXISTS idx_positions_symbol
-  ON public.positions (symbol);
+create index IF not exists idx_positions_symbol on public.positions using btree (symbol) TABLESPACE pg_default;
 
-CREATE INDEX IF NOT EXISTS idx_positions_created_at
-  ON public.positions (created_at DESC);
+create index IF not exists idx_positions_created_at on public.positions using btree (created_at desc) TABLESPACE pg_default;
 
-CREATE INDEX IF NOT EXISTS idx_positions_asset_class
-  ON public.positions (asset_class);
+create index IF not exists idx_positions_asset_class on public.positions using btree (asset_class) TABLESPACE pg_default;
 
-CREATE INDEX IF NOT EXISTS idx_positions_strategy_id
-  ON public.positions (strategy_id);
+create index IF not exists idx_positions_strategy_id on public.positions using btree (strategy_id) TABLESPACE pg_default;
 
+create index IF not exists idx_positions_user_id_exchange on public.positions using btree (user_id, exchange) TABLESPACE pg_default;
+
+create index IF not exists idx_positions_user_id_asset_class on public.positions using btree (user_id, asset_class) TABLESPACE pg_default;
+
+create index IF not exists idx_positions_user_id_symbol on public.positions using btree (user_id, symbol) TABLESPACE pg_default;

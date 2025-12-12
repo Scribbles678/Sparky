@@ -354,7 +354,7 @@ class PositionUpdater {
         exitReason,
         orderId: position.orderId,
         // REQUIRED for TradeFI dashboard integration
-        assetClass: 'crypto', // Aster DEX and Lighter DEX trade crypto
+        assetClass: 'crypto', // Aster DEX trades crypto
         exchange: this.api.exchangeName || 'aster', // Use actual exchange name
       });
       

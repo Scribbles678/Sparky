@@ -1,6 +1,6 @@
 # Sparky Trading Bot 🚀
 
-A headless trading bot that receives TradingView webhook alerts and executes trades on multiple exchanges (Aster DEX, Lighter DEX, OANDA, Tradier) with simple percentage-based stop loss and take profit.
+A headless trading bot that receives TradingView webhook alerts and executes trades on multiple exchanges (Aster DEX, OANDA, Tradier, and 100+ via CCXT) with simple percentage-based stop loss and take profit.
 
 **Part of the SignalStudio Trading Ecosystem:**
 - **SignalStudio Dashboard** - Real-time analytics, strategy management, and webhook processing (`app.signal-studio.co`)
@@ -17,10 +17,9 @@ TradingView Alerts → SignalStudio (/api/webhook) → Sparky Bot → Multiple E
 
 Supported Exchanges:
 - Aster DEX (Crypto Futures)
-- Lighter DEX (Crypto Perps on zkSync)
-- Hyperliquid (Crypto Perps)
 - OANDA (Forex)
 - Tradier (Stocks/Options)
+- 100+ Crypto Exchanges via CCXT (Binance, Coinbase, Apex, etc.)
 ```
 
 **Webhook Flow:**
@@ -42,21 +41,39 @@ Supported Exchanges:
 - 🗄️ Supabase integration: Logs trades/positions, powers SignalStudio dashboard
 - 🧮 Tradier options OTCO flow: Executor + monitor manage entry/TP/SL legs
 - ⚡ Position price updater: Refreshes every 30s, syncs with exchange every 5min
-- 🔒 Rate limiting: 30 req/min per endpoint (webhook limits enforced by SignalStudio)
+- 🔒 Rate limiting: 30 req/min per endpoint
+- 🚫 Risk management: Weekly trade/loss limits per exchange (configurable in SignalStudio)
+- 📊 Subscription limits: Monthly webhook limits based on subscription plan (Free/Pro)
+- 🤖 AI Signal Engine: Background worker using Groq LLM to generate trading signals
+- 👥 Copy Trading: Automatic fan-out of leader trades to followers with position scaling
 - 📝 Comprehensive logging with Winston
 - 🔄 Auto-restart with PM2
 
 ## Documentation & Maintenance
 
-- [docs/MULTI_TENANT.md](docs/MULTI_TENANT.md) – **Multi-tenant credential loading from SignalStudio**
-- [docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md) – **Server-side notifications system**
-- [docs/ORDER_BUILDER_INTEGRATION.md](docs/ORDER_BUILDER_INTEGRATION.md) – **How SignalStudio builds orders for Sparky**
-- [docs/EXCHANGES.md](docs/EXCHANGES.md) – Exchange-specific auth, sizing, and quirks
-- [docs/PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md) – Project structure overview
-- [docs/STRATEGIES.md](docs/STRATEGIES.md) – Strategy metadata, trailing stops, options
-- [docs/TRADINGVIEW.md](docs/TRADINGVIEW.md) – Webhook payload expectations + troubleshooting
-- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) – VPS deployment guide
+### 📚 Guides
+- [docs/guides/DEPLOYMENT.md](docs/guides/DEPLOYMENT.md) – VPS deployment guide
+- [docs/guides/TRADINGVIEW.md](docs/guides/TRADINGVIEW.md) – Webhook payload expectations + troubleshooting
+- [docs/guides/MULTI_TENANT.md](docs/guides/MULTI_TENANT.md) – Multi-tenant credential loading from SignalStudio
+- [docs/guides/ORDER_BUILDER_INTEGRATION.md](docs/guides/ORDER_BUILDER_INTEGRATION.md) – How SignalStudio builds orders for Sparky
+- [docs/guides/NOTIFICATIONS.md](docs/guides/NOTIFICATIONS.md) – Server-side notifications system
+- [docs/guides/AI_WORKER.md](docs/guides/AI_WORKER.md) – AI Signal Engine setup and configuration
+- [docs/guides/COPY_TRADING.md](docs/guides/COPY_TRADING.md) – Copy trading feature guide
+- [docs/guides/alert templates.md](docs/guides/alert%20templates.md) – TradingView alert templates
+
+### 📖 Reference
+- [docs/reference/API_REFERENCE.md](docs/reference/API_REFERENCE.md) – Complete API endpoint reference
+- [docs/reference/EXCHANGES.md](docs/reference/EXCHANGES.md) – Exchange-specific auth, sizing, and quirks
+- [docs/reference/STRATEGIES.md](docs/reference/STRATEGIES.md) – Strategy metadata, trailing stops, options
+- [docs/reference/PROJECT_STRUCTURE.md](docs/reference/PROJECT_STRUCTURE.md) – Project structure overview
+- [docs/reference/RISK_LIMITS.md](docs/reference/RISK_LIMITS.md) – Risk management and limits
+- [docs/reference/WEBHOOK_LIMITS.md](docs/reference/WEBHOOK_LIMITS.md) – Subscription-based webhook limits
+
+### 🗄️ Database Schema
 - Supabase/SQL migrations live in [`docs/schema/`](docs/schema/).
+
+### 🗺️ Roadmap
+- Future plans and implementation notes in [`docs/roadmap/`](docs/roadmap/).
 
 > **Whenever you change behavior or schema, update the related markdown or SQL in this repo.**  
 > This repository is the single source of truth—no private Notion/Google Docs.
@@ -76,36 +93,13 @@ Supported Exchanges:
 - Node.js v18 or higher
 - Exchange API credentials:
   - **Aster DEX**: [Get API key](https://www.asterdex.com/)
-  - **Lighter DEX**: [Get API key](https://lighter.xyz) (zkSync)
   - **OANDA**: [Get API key](https://www.oanda.com/)
   - **Tradier**: [Get API key](https://tradier.com/)
+  - **CCXT Exchanges**: See [CCXT documentation](https://docs.ccxt.com/) for supported exchanges
 - TradingView account (for webhook alerts)
 - DigitalOcean droplet or VPS (for 24/7 deployment)
 
 ## Installation
-
-### 🆕 New: Lighter DEX Integration
-
-The bot now supports **Lighter DEX** - a decentralized perpetual exchange on zkSync with up to 100x leverage!
-
-**Quick Setup:**
-1. Get Lighter API credentials at [lighter.xyz](https://lighter.xyz)
-2. Add to your `config.json`:
-```json
-{
-  "lighter": {
-    "apiKey": "YOUR_LIGHTER_API_KEY",
-    "privateKey": "YOUR_ETH_PRIVATE_KEY",
-    "accountIndex": 0,
-    "apiKeyIndex": 2,
-    "baseUrl": "https://mainnet.zklighter.elliot.ai",
-    "tradeAmount": 500
-  }
-}
-```
-3. Trade with webhook: `{"exchange": "lighter", "symbol": "BTC-USD", "action": "BUY"}`
-
-📖 **Full Guide**: See [docs/EXCHANGES.md](docs/EXCHANGES.md#lighter-dex-zk-rollup)
 
 ### 1. Clone & Install Dependencies
 
@@ -880,9 +874,12 @@ sparky-bot/
 ├── .gitignore
 ├── package.json
 ├── ecosystem.config.js       # PM2 configuration
-├── DEPLOYMENT.md             # Detailed deployment guide
-├── PROJECT_STRUCTURE.md      # Project structure overview
-└── README.md                 # This file
+└── docs/                     # Documentation
+    ├── README.md             # Main documentation (this file)
+    ├── guides/               # How-to guides
+    ├── reference/            # Technical reference
+    ├── roadmap/              # Future plans
+    └── schema/               # Database schemas
 ```
 
 ## Troubleshooting
@@ -910,19 +907,27 @@ sparky-bot/
 - Check that `ASTER_API_URL` is `https://fapi.asterdex.com`
 - Ensure system time is synchronized: `timedatectl`
 
-## Future Enhancements
+## Implemented Features
 
 - [x] Web dashboard for position monitoring (SignalStudio Dashboard - deployed!)
-- [ ] Telegram bot integration for trade alerts
 - [x] Database for trade history and analytics (Supabase - implemented)
-- [ ] Backtesting mode with historical data
 - [x] Multiple account support (Multi-tenant per-user credentials)
 - [x] Dynamic position sizing based on account balance (Strategy configs)
 - [x] Trailing stops (OANDA support)
+- [x] Webhook signature verification (Per-user secrets from Supabase)
+- [x] AI Signal Engine (Groq LLM-based trading signals)
+- [x] Copy Trading (Automatic trade replication with position scaling)
+- [x] Risk Management (Weekly trade/loss limits per exchange)
+- [x] Subscription Limits (Monthly webhook limits by plan)
+
+## Future Enhancements
+
+- [ ] Telegram bot integration for trade alerts
+- [ ] Backtesting mode with historical data
 - [ ] Break-even automation after TP1
 - [ ] Multiple TP levels (TP1, TP2, TP3)
 - [ ] ATR-based stop loss calculation
-- [x] Webhook signature verification (Per-user secrets from Supabase)
+- [ ] TastyTrade futures integration
 
 ## Support & Documentation
 

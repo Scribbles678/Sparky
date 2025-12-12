@@ -4,7 +4,7 @@ const rateLimit = require('express-rate-limit');
 const fs = require('fs');
 const path = require('path');
 const logger = require('./utils/logger');
-const AsterAPI = require('./asterApi');
+const AsterAPI = require('./exchanges/asterApi');
 const PositionTracker = require('./positionTracker');
 const TradeExecutor = require('./tradeExecutor');
 const TradierOptionsExecutor = require('./executors/tradierOptionsExecutor');
@@ -60,8 +60,6 @@ config.aster = config.aster || {};
 config.oanda = config.oanda || {};
 config.tradier = config.tradier || {};
 config.tradierOptions = config.tradierOptions || config.tradier_options || {};
-config.hyperliquid = config.hyperliquid || {};
-config.lighter = config.lighter || {};
 config.riskManagement = config.riskManagement || { maxPositions: 10 };
 
 let WEBHOOK_SECRET = config.webhookSecret || process.env.WEBHOOK_SECRET || null;
@@ -81,8 +79,6 @@ async function applySupabaseCredentials() {
       oanda: 'oanda',
       tradier: 'tradier',
       tradier_options: 'tradierOptions',
-      lighter: 'lighter',
-      hyperliquid: 'hyperliquid',
     };
 
     credentials.forEach((entry) => {
@@ -296,66 +292,6 @@ app.get('/positions', (req, res) => {
     res.json(summary);
   } catch (error) {
     logger.logError('Failed to get positions', error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
-  }
-});
-
-/**
- * Test webhook endpoint - accepts any data and shows what was received
- * Useful for debugging TradingView webhook configuration
- */
-app.post('/webhook/test', (req, res) => {
-  const receivedData = {
-    headers: {
-      'content-type': req.get('content-type'),
-      'user-agent': req.get('user-agent'),
-    },
-    body: req.body,
-    bodyIsEmpty: Object.keys(req.body).length === 0,
-    bodyKeys: Object.keys(req.body),
-    rawBody: JSON.stringify(req.body, null, 2),
-  };
-
-  logger.info('Test webhook received', receivedData);
-
-  res.json({
-    success: true,
-    message: 'Test webhook received successfully',
-    received: receivedData,
-    expectedFormat: {
-      secret: 'your-webhook-secret',
-      action: 'buy or sell or close',
-      symbol: 'BTCUSDT',
-      orderType: 'market (optional, defaults to market)',
-      stop_loss_percent: 2,
-      take_profit_percent: 4,
-    },
-  });
-});
-
-/**
- * Sync positions with exchange
- */
-app.post('/positions/sync', async (req, res) => {
-  try {
-    if (!asterApi) {
-      return res.status(503).json({
-        success: false,
-        error: 'Exchange not initialized'
-      });
-    }
-
-    const summary = await positionTracker.syncWithExchange(asterApi);
-    res.json({
-      success: true,
-      message: 'Positions synced with exchange',
-      summary,
-    });
-  } catch (error) {
-    logger.logError('Failed to sync positions', error);
     res.status(500).json({
       success: false,
       error: error.message,

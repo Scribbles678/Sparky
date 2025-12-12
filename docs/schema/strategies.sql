@@ -1,46 +1,43 @@
--- Table: public.strategies
-
-CREATE TABLE IF NOT EXISTS public.strategies (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  created_at timestamp with time zone DEFAULT now(),
-  updated_at timestamp with time zone DEFAULT now(),
-  name text NOT NULL,
-  description text,
-  asset_class public.asset_class_type,
-  status text DEFAULT 'inactive',
-  pine_script text,
-  pine_script_version text DEFAULT 'v5',
-  success_rate numeric(5, 2),
-  avg_profit numeric(10, 2),
-  total_trades integer DEFAULT 0,
-  winning_trades integer DEFAULT 0,
-  losing_trades integer DEFAULT 0,
-  risk_level text,
-  max_position_size_usd numeric(10, 2),
-  stop_loss_percent numeric(5, 2),
-  take_profit_percent numeric(5, 2),
-  timeframe text,
-  symbols text[],
-  webhook_secret text,
-  notes text,
-  CONSTRAINT strategies_status_check CHECK (
-    status = ANY (ARRAY['active', 'inactive', 'testing'])
-  ),
-  CONSTRAINT strategies_risk_level_check CHECK (
-    risk_level = ANY (ARRAY['low', 'medium', 'high'])
+create table public.strategies (
+  id uuid not null default gen_random_uuid (),
+  created_at timestamp with time zone null default now(),
+  updated_at timestamp with time zone null default now(),
+  name text not null,
+  description text null,
+  asset_class public.asset_class_type null,
+  status text null default 'inactive'::text,
+  total_trades integer null default 0,
+  winning_trades integer null default 0,
+  stop_loss_percent numeric(5, 2) null,
+  take_profit_percent numeric(5, 2) null,
+  notes text null,
+  user_id uuid null,
+  order_config jsonb null default '{}'::jsonb,
+  constraint strategies_pkey primary key (id),
+  constraint strategies_user_id_fkey foreign KEY (user_id) references auth.users (id) on delete CASCADE,
+  constraint strategies_status_check check (
+    (
+      status = any (
+        array['active'::text, 'inactive'::text, 'testing'::text]
+      )
+    )
   )
-);
+) TABLESPACE pg_default;
 
-CREATE INDEX IF NOT EXISTS idx_strategies_status
-  ON public.strategies (status);
+create index IF not exists idx_strategies_user_id on public.strategies using btree (user_id) TABLESPACE pg_default;
 
-CREATE INDEX IF NOT EXISTS idx_strategies_asset_class
-  ON public.strategies (asset_class);
+create index IF not exists idx_strategies_status on public.strategies using btree (status) TABLESPACE pg_default;
 
-CREATE INDEX IF NOT EXISTS idx_strategies_name
-  ON public.strategies (name);
+create index IF not exists idx_strategies_asset_class on public.strategies using btree (asset_class) TABLESPACE pg_default;
 
--- Trigger maintained in Supabase:
--- CREATE TRIGGER strategies_updated_at BEFORE UPDATE ON strategies
---   FOR EACH ROW EXECUTE FUNCTION update_strategies_updated_at();
+create index IF not exists idx_strategies_name on public.strategies using btree (name) TABLESPACE pg_default;
 
+create index IF not exists idx_strategies_user_id_status on public.strategies using btree (user_id, status) TABLESPACE pg_default;
+
+create index IF not exists idx_strategies_user_id_asset_class on public.strategies using btree (user_id, asset_class) TABLESPACE pg_default;
+
+create index IF not exists idx_strategies_order_config on public.strategies using gin (order_config) TABLESPACE pg_default;
+
+create trigger strategies_updated_at BEFORE
+update on strategies for EACH row
+execute FUNCTION update_strategies_updated_at ();

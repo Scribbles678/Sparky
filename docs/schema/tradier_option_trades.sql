@@ -1,40 +1,40 @@
--- Table: public.tradier_option_trades
+create table public.tradier_option_trades (
+  id uuid not null default gen_random_uuid (),
+  created_at timestamp with time zone null default now(),
+  updated_at timestamp with time zone null default now(),
+  status text null default 'pending'::text,
+  strategy text null,
+  underlying_symbol text not null,
+  option_symbol text not null,
+  option_type text null,
+  strike_price numeric(18, 4) null,
+  expiration_date date null,
+  contract_size integer null default 100,
+  quantity_contracts numeric(18, 4) null,
+  entry_order_id text null,
+  tp_order_id text null,
+  sl_order_id text null,
+  time_exit_order_id text null,
+  entry_order jsonb null,
+  tp_leg jsonb null,
+  sl_leg jsonb null,
+  time_exit_order jsonb null,
+  entry_limit_price numeric(18, 8) null,
+  tp_limit_price numeric(18, 8) null,
+  sl_stop_price numeric(18, 8) null,
+  sl_limit_price numeric(18, 8) null,
+  cost_usd numeric(18, 4) null,
+  pnl_usd numeric(18, 4) null,
+  pnl_percent numeric(18, 4) null,
+  config_snapshot jsonb null default '{}'::jsonb,
+  extra_metadata jsonb null default '{}'::jsonb,
+  user_id uuid null,
+  constraint tradier_option_trades_pkey primary key (id),
+  constraint tradier_option_trades_user_id_fkey foreign KEY (user_id) references auth.users (id) on delete CASCADE
+) TABLESPACE pg_default;
 
-CREATE TABLE IF NOT EXISTS public.tradier_option_trades (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  created_at timestamp with time zone DEFAULT now(),
-  updated_at timestamp with time zone DEFAULT now(),
-  status text DEFAULT 'pending',
-  strategy text,
-  underlying_symbol text NOT NULL,
-  option_symbol text NOT NULL,
-  option_type text,
-  strike_price numeric(18, 4),
-  expiration_date date,
-  contract_size integer DEFAULT 100,
-  quantity_contracts numeric(18, 4),
-  entry_order_id text,
-  tp_order_id text,
-  sl_order_id text,
-  time_exit_order_id text,
-  entry_order jsonb,
-  tp_leg jsonb,
-  sl_leg jsonb,
-  time_exit_order jsonb,
-  entry_limit_price numeric(18, 8),
-  tp_limit_price numeric(18, 8),
-  sl_stop_price numeric(18, 8),
-  sl_limit_price numeric(18, 8),
-  cost_usd numeric(18, 4),
-  pnl_usd numeric(18, 4),
-  pnl_percent numeric(18, 4),
-  config_snapshot jsonb DEFAULT '{}'::jsonb,
-  extra_metadata jsonb DEFAULT '{}'::jsonb
-);
+create index IF not exists idx_tradier_option_trades_status on public.tradier_option_trades using btree (status) TABLESPACE pg_default;
 
-CREATE INDEX IF NOT EXISTS idx_tradier_option_trades_status
-  ON public.tradier_option_trades (status);
+create index IF not exists idx_tradier_option_trades_option_symbol on public.tradier_option_trades using btree (option_symbol) TABLESPACE pg_default;
 
-CREATE INDEX IF NOT EXISTS idx_tradier_option_trades_option_symbol
-  ON public.tradier_option_trades (option_symbol);
-
+create index IF not exists idx_tradier_option_trades_user_id on public.tradier_option_trades using btree (user_id) TABLESPACE pg_default;

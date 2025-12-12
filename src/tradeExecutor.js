@@ -46,8 +46,6 @@ class TradeExecutor {
       'oanda': 'forex',
       'tradier': 'stocks',
       'tradier_options': 'options',
-      'lighter': 'crypto',
-      'hyperliquid': 'crypto',
       'tastytrade': 'futures',
     };
     return exchangeAssetMap[this.exchange] || 'crypto';

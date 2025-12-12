@@ -7,7 +7,7 @@
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
     "test": "node test/testWebhook.js",
-    "test:apex": "node test-apex.js"
+    "test:apex": "node test/test-apex.js"
   },
   "keywords": [
     "trading-bot",

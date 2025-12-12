@@ -7,12 +7,10 @@
  * - createExchange(): Creates instance from provided config (legacy/fallback)
  */
 
-const AsterAPI = require('../asterApi');
+const AsterAPI = require('./asterApi');
 const OandaAPI = require('./oandaApi');
 const TradierAPI = require('./tradierApi');
 const TradierOptionsAPI = require('./tradierOptionsApi');
-const LighterAPI = require('./lighterApi');
-const { HyperliquidAPI } = require('./hyperliquidApi');
 const CCXTExchangeAPI = require('./ccxtExchangeApi');
 const logger = require('../utils/logger');
 const { getUserExchangeCredentials } = require('../supabaseClient');
@@ -70,29 +68,6 @@ class ExchangeFactory {
           config.environment || 'sandbox'
         );
       
-      case 'lighter':
-        if (!config.apiKey || !config.privateKey || !config.accountIndex) {
-          throw new Error('Lighter requires apiKey, privateKey, and accountIndex');
-        }
-        return new LighterAPI(
-          config.apiKey,
-          config.privateKey,
-          config.accountIndex,
-          config.apiKeyIndex || 2,
-          config.baseUrl || 'https://mainnet.zklighter.elliot.ai'
-        );
-      
-      case 'hyperliquid':
-        if (!config.apiKey || !config.privateKey) {
-          throw new Error('Hyperliquid requires apiKey and privateKey');
-        }
-        return new HyperliquidAPI(
-          config.apiKey,
-          config.privateKey,
-          config.baseUrl || 'https://api.hyperliquid.xyz',
-          config.isTestnet || false
-        );
-      
       default:
         // Try CCXT for any other exchange (apex, binance, coinbase, etc.)
         // CCXT supports 100+ exchanges with unified API
@@ -101,7 +76,7 @@ class ExchangeFactory {
         } catch (ccxtError) {
           throw new Error(
             `Unknown exchange: ${exchangeName}. ` +
-            `Custom exchanges: aster, oanda, tradier, tradier_options, lighter, hyperliquid. ` +
+            `Custom exchanges: aster, oanda, tradier, tradier_options. ` +
             `CCXT error: ${ccxtError.message}`
           );
         }
@@ -156,26 +131,6 @@ class ExchangeFactory {
       }
     }
     
-    // Create Lighter instance if configured
-    if (fullConfig.lighter && fullConfig.lighter.apiKey) {
-      try {
-        exchanges.lighter = this.createExchange('lighter', fullConfig.lighter);
-        logger.info('✅ Lighter DEX API initialized');
-      } catch (error) {
-        logger.warn(`⚠️  Failed to initialize Lighter: ${error.message}`);
-      }
-    }
-    
-    // Create Hyperliquid instance if configured
-    if (fullConfig.hyperliquid && fullConfig.hyperliquid.apiKey) {
-      try {
-        exchanges.hyperliquid = this.createExchange('hyperliquid', fullConfig.hyperliquid);
-        logger.info('✅ Hyperliquid API initialized');
-      } catch (error) {
-        logger.warn(`⚠️  Failed to initialize Hyperliquid: ${error.message}`);
-      }
-    }
-    
     return exchanges;
   }
 
@@ -185,7 +140,7 @@ class ExchangeFactory {
    */
   static getSupportedExchanges() {
     // Custom exchanges + CCXT exchanges (100+)
-    const customExchanges = ['aster', 'oanda', 'tradier', 'tradier_options', 'lighter', 'hyperliquid'];
+    const customExchanges = ['aster', 'oanda', 'tradier', 'tradier_options'];
     
     // Get CCXT exchanges (dynamically)
     try {
@@ -277,23 +232,6 @@ class ExchangeFactory {
           accountId: credentials.accountId || credentials.extra?.accountId,
           accessToken: credentials.accessToken || credentials.apiKey,
           environment: credentials.environment || 'sandbox',
-        };
-      
-      case 'lighter':
-        return {
-          apiKey: credentials.apiKey,
-          privateKey: credentials.apiSecret,
-          accountIndex: credentials.extra?.accountIndex || 0,
-          apiKeyIndex: credentials.extra?.apiKeyIndex || 2,
-          baseUrl: credentials.extra?.baseUrl || 'https://mainnet.zklighter.elliot.ai',
-        };
-      
-      case 'hyperliquid':
-        return {
-          apiKey: credentials.apiKey,
-          privateKey: credentials.apiSecret,
-          baseUrl: credentials.extra?.baseUrl || 'https://api.hyperliquid.xyz',
-          isTestnet: credentials.extra?.isTestnet || false,
         };
       
       default:
