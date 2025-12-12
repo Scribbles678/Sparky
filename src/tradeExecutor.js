@@ -47,6 +47,7 @@ class TradeExecutor {
       'tradier': 'stocks',
       'tradier_options': 'options',
       'tastytrade': 'futures',
+      'kalshi': 'prediction',
     };
     return exchangeAssetMap[this.exchange] || 'crypto';
   }
@@ -92,7 +93,8 @@ class TradeExecutor {
 
       // Route to appropriate handler
       if (action.toLowerCase() === 'close') {
-        return await this.closePosition(symbol, strategy, alertData.userId);
+        // PHASE 2: Pass sell_percentage for partial closes
+        return await this.closePosition(symbol, strategy, alertData.userId, alertData.sell_percentage);
       } else if (['buy', 'sell'].includes(action.toLowerCase())) {
         return await this.openPosition(alertData);
       } else {
@@ -414,8 +416,9 @@ class TradeExecutor {
    * @param {String} symbol - Trading symbol
    * @param {String} strategy - Strategy name (optional)
    * @param {String} userId - User ID for multi-tenant support
+   * @param {Number} sellPercentage - Percentage to close (1-100, default 100 for full close)
    */
-  async closePosition(symbol, strategy = null, userId = null) {
+  async closePosition(symbol, strategy = null, userId = null, sellPercentage = 100) {
     logger.info(`Closing position for ${symbol}${userId ? ` (user: ${userId})` : ''}`);
 
     try {
@@ -442,7 +445,24 @@ class TradeExecutor {
 
       // Get position details
       const positionAmt = parseFloat(exchangePosition.positionAmt);
-      const quantity = Math.abs(positionAmt);
+      const fullQuantity = Math.abs(positionAmt);
+      
+      // PHASE 2: Calculate quantity based on sell percentage
+      const sellPct = parseFloat(sellPercentage) || 100;
+      let quantity = fullQuantity;
+      
+      if (sellPct < 100 && sellPct > 0) {
+        // Partial close: calculate quantity to close
+        quantity = Math.floor((fullQuantity * sellPct) / 100);
+        if (quantity === 0) {
+          quantity = 1; // At least close 1 unit
+        }
+        logger.info(`Partial close: Closing ${quantity} of ${fullQuantity} (${sellPct}%) for ${symbol}`);
+      } else {
+        // Full close (default behavior)
+        quantity = fullQuantity;
+      }
+      
       const side = positionAmt > 0 ? 'SELL' : 'BUY'; // Opposite side to close
       
       // Get entry price and calculate exit price
@@ -581,11 +601,20 @@ class TradeExecutor {
         }
       }
 
-      // Remove position from database (with userId for multi-tenant safety)
-      await removePosition(symbol, userId);
-      
-      // Remove from tracker
-      this.tracker.removePosition(symbol, this.exchange);
+      // PHASE 2: Only remove position if fully closed
+      if (quantity >= fullQuantity || sellPct >= 100) {
+        // Full close: remove position from database and tracker
+        await removePosition(symbol, userId);
+        this.tracker.removePosition(symbol, this.exchange);
+        logger.info(`Position fully closed and removed for ${symbol}`);
+      } else {
+        // Partial close: update position quantity in tracker (don't remove)
+        // The position tracker and database will be updated with remaining quantity
+        // Note: This assumes the exchange API properly handles partial closes
+        // If your exchange updates position automatically, this may not be needed
+        logger.info(`Partial close completed: ${fullQuantity - quantity} remaining for ${symbol}`);
+        // Position will still be tracked with reduced quantity after exchange processes the close
+      }
 
       logger.info(`Position closed successfully for ${symbol} with P&L: $${pnlUsd.toFixed(2)}`);
 

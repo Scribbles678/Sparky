@@ -101,7 +101,7 @@ async function fanOutToFollowers(leaderTrade) {
     // Get all active followers for this strategy
     const { data: followers, error: followersError } = await supabase
       .from('copy_relationships')
-      .select('id, follower_user_id, allocation_percent, max_drawdown_stop, current_drawdown_percent')
+      .select('id, follower_user_id, allocation_percent, max_drawdown_stop, current_drawdown_percent, sell_percentage, max_buys_per_hour, max_buys_per_day, max_buys_per_token_per_day, max_buys_per_token_per_week')
       .eq('leader_strategy_id', strategyId)
       .eq('status', 'active');
 
@@ -187,6 +187,58 @@ async function fanOutToFollowers(leaderTrade) {
               maxDrawdown: follower.max_drawdown_stop
             }
           };
+        }
+
+        // =====================================================================
+        // PHASE 2: Rate Limiting Checks
+        // =====================================================================
+        if (action === 'BUY' || action === 'buy') {
+          const rateLimitCheck = await checkCopyTradingRateLimits(
+            follower.id,
+            follower.follower_user_id,
+            symbol,
+            {
+              max_buys_per_hour: follower.max_buys_per_hour,
+              max_buys_per_day: follower.max_buys_per_day,
+              max_buys_per_token_per_day: follower.max_buys_per_token_per_day,
+              max_buys_per_token_per_week: follower.max_buys_per_token_per_week
+            }
+          );
+
+          if (!rateLimitCheck.allowed) {
+            logger.debug(`Skipping follower ${follower.follower_user_id}: rate limit exceeded`, {
+              reason: rateLimitCheck.reason,
+              limit: rateLimitCheck.limit,
+              current: rateLimitCheck.current
+            });
+
+            // Log skipped trade
+            await logCopiedTrade({
+              copyRelationshipId: follower.id,
+              followerUserId: follower.follower_user_id,
+              leaderUserId: leaderUserId,
+              leaderStrategyId: strategyId,
+              symbol,
+              side: action,
+              leaderSizeUsd: positionSizeUsd,
+              followerSizeUsd: 0,
+              originalTradeId: originalTradeId,
+              followerTradeId: null,
+              success: false,
+              error: rateLimitCheck.reason
+            });
+
+            return {
+              followerId: follower.follower_user_id,
+              success: false,
+              reason: 'rate_limit_exceeded',
+              details: {
+                limitType: rateLimitCheck.limitType,
+                limit: rateLimitCheck.limit,
+                current: rateLimitCheck.current
+              }
+            };
+          }
         }
 
         // Calculate scaled position size
@@ -282,6 +334,10 @@ async function fanOutToFollowers(leaderTrade) {
           };
         }
 
+        // PHASE 2: Handle sell percentage for SELL/CLOSE actions
+        // Note: For CLOSE actions, sell_percentage controls partial closes
+        // For BUY actions, position_size_usd is scaled by allocation_percent
+
         // Prepare webhook payload for follower
         const followerPayload = {
           user_id: follower.follower_user_id,
@@ -290,12 +346,13 @@ async function fanOutToFollowers(leaderTrade) {
           exchange: exchange.toLowerCase(),
           symbol: symbol,
           action: action, // BUY, SELL, CLOSE
-          position_size_usd: scaledSizeUsd,
+          position_size_usd: scaledSizeUsd, // For BUY actions, this is already scaled
           strategy_id: strategyId,
           source: 'copy_trading',
           copied_from_strategy_id: strategyId,
           copied_from_user_id: leaderUserId,
-          copy_relationship_id: follower.id
+          copy_relationship_id: follower.id,
+          sell_percentage: follower.sell_percentage || 100 // For CLOSE actions, controls partial close percentage
         };
 
         // Execute follower's trade by calling webhook endpoint
@@ -743,11 +800,148 @@ async function updateCopyRelationshipDrawdown(copyRelationshipId) {
   }
 }
 
+/**
+ * Check copy trading rate limits for a follower
+ * 
+ * @param {string} relationshipId - Copy relationship ID
+ * @param {string} followerUserId - Follower user ID
+ * @param {string} symbol - Trading symbol
+ * @param {Object} limits - Rate limit configuration
+ * @returns {Promise<Object>} Rate limit check result
+ */
+async function checkCopyTradingRateLimits(relationshipId, followerUserId, symbol, limits) {
+  const { getCache, setCache } = require('./redis');
+  const { isRedisAvailable } = require('./redis');
+  
+  const now = new Date();
+  const hourStart = new Date(now);
+  hourStart.setUTCMinutes(0, 0, 0);
+  hourStart.setUTCSeconds(0, 0);
+  
+  const dayStart = new Date(now);
+  dayStart.setUTCHours(0, 0, 0, 0);
+  
+  // Calculate week start (Monday)
+  const weekStart = new Date(dayStart);
+  const dayOfWeek = weekStart.getUTCDay();
+  const daysToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1; // Sunday = 0, so subtract 6
+  weekStart.setUTCDate(weekStart.getUTCDate() - daysToMonday);
+  
+  // Helper to get cache key
+  const getKey = (prefix, relationshipId, timeKey, symbol = null) => {
+    const symbolKey = symbol ? `:${symbol.toUpperCase()}` : '';
+    return `copy_rate:${prefix}:${relationshipId}:${timeKey}${symbolKey}`;
+  };
+
+  // Check max_buys_per_hour
+  if (limits.max_buys_per_hour !== null && limits.max_buys_per_hour !== undefined) {
+    const hourKey = getKey('hour', relationshipId, hourStart.getTime());
+    const hourCount = (await getCache(hourKey)) || 0;
+    
+    if (hourCount >= limits.max_buys_per_hour) {
+      return {
+        allowed: false,
+        reason: `Max buys per hour limit exceeded (${hourCount}/${limits.max_buys_per_hour})`,
+        limitType: 'max_buys_per_hour',
+        limit: limits.max_buys_per_hour,
+        current: hourCount
+      };
+    }
+  }
+
+  // Check max_buys_per_day
+  if (limits.max_buys_per_day !== null && limits.max_buys_per_day !== undefined) {
+    const dayKey = getKey('day', relationshipId, dayStart.toISOString().split('T')[0]);
+    const dayCount = (await getCache(dayKey)) || 0;
+    
+    if (dayCount >= limits.max_buys_per_day) {
+      return {
+        allowed: false,
+        reason: `Max buys per day limit exceeded (${dayCount}/${limits.max_buys_per_day})`,
+        limitType: 'max_buys_per_day',
+        limit: limits.max_buys_per_day,
+        current: dayCount
+      };
+    }
+  }
+
+  // Check max_buys_per_token_per_day
+  if (limits.max_buys_per_token_per_day !== null && limits.max_buys_per_token_per_day !== undefined) {
+    const tokenDayKey = getKey('token_day', relationshipId, dayStart.toISOString().split('T')[0], symbol);
+    const tokenDayCount = (await getCache(tokenDayKey)) || 0;
+    
+    if (tokenDayCount >= limits.max_buys_per_token_per_day) {
+      return {
+        allowed: false,
+        reason: `Max buys per token per day limit exceeded for ${symbol} (${tokenDayCount}/${limits.max_buys_per_token_per_day})`,
+        limitType: 'max_buys_per_token_per_day',
+        limit: limits.max_buys_per_token_per_day,
+        current: tokenDayCount
+      };
+    }
+  }
+
+  // Check max_buys_per_token_per_week
+  if (limits.max_buys_per_token_per_week !== null && limits.max_buys_per_token_per_week !== undefined) {
+    const tokenWeekKey = getKey('token_week', relationshipId, weekStart.toISOString().split('T')[0], symbol);
+    const tokenWeekCount = (await getCache(tokenWeekKey)) || 0;
+    
+    if (tokenWeekCount >= limits.max_buys_per_token_per_week) {
+      return {
+        allowed: false,
+        reason: `Max buys per token per week limit exceeded for ${symbol} (${tokenWeekCount}/${limits.max_buys_per_token_per_week})`,
+        limitType: 'max_buys_per_token_per_week',
+        limit: limits.max_buys_per_token_per_week,
+        current: tokenWeekCount
+      };
+    }
+  }
+
+  // All checks passed - increment counters
+  if (isRedisAvailable()) {
+    // Increment hour counter (TTL: 1 hour)
+    if (limits.max_buys_per_hour !== null && limits.max_buys_per_hour !== undefined) {
+      const hourKey = getKey('hour', relationshipId, hourStart.getTime());
+      const hourCount = ((await getCache(hourKey)) || 0) + 1;
+      await setCache(hourKey, hourCount, 3600); // 1 hour TTL
+    }
+
+    // Increment day counter (TTL: 24 hours)
+    if (limits.max_buys_per_day !== null && limits.max_buys_per_day !== undefined) {
+      const dayKey = getKey('day', relationshipId, dayStart.toISOString().split('T')[0]);
+      const dayCount = ((await getCache(dayKey)) || 0) + 1;
+      await setCache(dayKey, dayCount, 86400); // 24 hours TTL
+    }
+
+    // Increment token day counter (TTL: 24 hours)
+    if (limits.max_buys_per_token_per_day !== null && limits.max_buys_per_token_per_day !== undefined) {
+      const tokenDayKey = getKey('token_day', relationshipId, dayStart.toISOString().split('T')[0], symbol);
+      const tokenDayCount = ((await getCache(tokenDayKey)) || 0) + 1;
+      await setCache(tokenDayKey, tokenDayCount, 86400); // 24 hours TTL
+    }
+
+    // Increment token week counter (TTL: 7 days)
+    if (limits.max_buys_per_token_per_week !== null && limits.max_buys_per_token_per_week !== undefined) {
+      const tokenWeekKey = getKey('token_week', relationshipId, weekStart.toISOString().split('T')[0], symbol);
+      const tokenWeekCount = ((await getCache(tokenWeekKey)) || 0) + 1;
+      await setCache(tokenWeekKey, tokenWeekCount, 604800); // 7 days TTL
+    }
+  } else {
+    // If Redis not available, log warning but allow trade
+    logger.debug('[Rate Limiting] Redis not available, skipping rate limit tracking');
+  }
+
+  return {
+    allowed: true
+  };
+}
+
 module.exports = {
   fanOutToFollowers,
   logCopiedTrade,
   updateCopiedTradePnl,
   updateCopiedTradeFollowerId,
-  updateCopyRelationshipDrawdown
+  updateCopyRelationshipDrawdown,
+  checkCopyTradingRateLimits
 };
 

@@ -12,6 +12,7 @@ const OandaAPI = require('./oandaApi');
 const TradierAPI = require('./tradierApi');
 const TradierOptionsAPI = require('./tradierOptionsApi');
 const CCXTExchangeAPI = require('./ccxtExchangeApi');
+const KalshiAPI = require('./kalshiApi');
 const logger = require('../utils/logger');
 const { getUserExchangeCredentials } = require('../supabaseClient');
 
@@ -67,6 +68,16 @@ class ExchangeFactory {
           config.accessToken,
           config.environment || 'sandbox'
         );
+
+      case 'kalshi':
+        if (!config.apiKeyId || !config.privateKey) {
+          throw new Error('Kalshi requires apiKeyId and privateKey');
+        }
+        return new KalshiAPI(
+          config.apiKeyId,
+          config.privateKey,
+          config.environment || 'production'
+        );
       
       default:
         // Try CCXT for any other exchange (apex, binance, coinbase, etc.)
@@ -76,7 +87,7 @@ class ExchangeFactory {
         } catch (ccxtError) {
           throw new Error(
             `Unknown exchange: ${exchangeName}. ` +
-            `Custom exchanges: aster, oanda, tradier, tradier_options. ` +
+            `Custom exchanges: aster, oanda, tradier, tradier_options, kalshi. ` +
             `CCXT error: ${ccxtError.message}`
           );
         }
@@ -130,6 +141,16 @@ class ExchangeFactory {
         logger.warn(`⚠️  Failed to initialize Tradier Options: ${error.message}`);
       }
     }
+
+    // Create Kalshi instance if configured
+    if (fullConfig.kalshi && fullConfig.kalshi.apiKeyId) {
+      try {
+        exchanges.kalshi = this.createExchange('kalshi', fullConfig.kalshi);
+        logger.info('✅ Kalshi API initialized');
+      } catch (error) {
+        logger.warn(`⚠️  Failed to initialize Kalshi: ${error.message}`);
+      }
+    }
     
     return exchanges;
   }
@@ -140,7 +161,7 @@ class ExchangeFactory {
    */
   static getSupportedExchanges() {
     // Custom exchanges + CCXT exchanges (100+)
-    const customExchanges = ['aster', 'oanda', 'tradier', 'tradier_options'];
+    const customExchanges = ['aster', 'oanda', 'tradier', 'tradier_options', 'kalshi'];
     
     // Get CCXT exchanges (dynamically)
     try {
@@ -232,6 +253,13 @@ class ExchangeFactory {
           accountId: credentials.accountId || credentials.extra?.accountId,
           accessToken: credentials.accessToken || credentials.apiKey,
           environment: credentials.environment || 'sandbox',
+        };
+
+      case 'kalshi':
+        return {
+          apiKeyId: credentials.apiKey, // Key ID goes in api_key field
+          privateKey: credentials.apiSecret, // Private key goes in api_secret field
+          environment: credentials.environment || 'production',
         };
       
       default:

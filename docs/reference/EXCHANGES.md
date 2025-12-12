@@ -12,6 +12,7 @@ This document covers all supported exchanges, their authentication requirements,
 | OANDA | Forex | `oanda` | ✅ Production |
 | Tradier | Stocks/ETFs | `tradier` | ✅ Production |
 | Tradier Options | Options | `tradier_options` | ✅ Production |
+| Kalshi | Prediction Markets | `kalshi` | ✅ Production |
 | CCXT Exchanges | Crypto/Stocks/Futures | `binance`, `coinbase`, `apex`, etc. | ✅ Production |
 
 ---
@@ -169,6 +170,65 @@ This document covers all supported exchanges, their authentication requirements,
 - TP/SL percentages
 - Max signal age (seconds)
 - Auto-close outside trading window
+
+---
+
+## Kalshi (Prediction Markets)
+
+### Configuration
+
+```json
+{
+  "kalshi": {
+    "apiKeyId": "your-api-key-id",
+    "privateKey": "-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----",
+    "environment": "production"
+  }
+}
+```
+
+### Details
+- **REST Base URL:** 
+  - Production: `https://api.kalshi.com/trade-api/v2`
+  - Demo: `https://demo-api.kalshi.com/trade-api/v2`
+- **Authentication:** RSA-PSS signature authentication
+- **Required Config:** `apiKeyId` (Key ID), `privateKey` (RSA private key in PEM format)
+- **Optional Config:** `environment` (`production` or `demo`)
+
+### Notes
+- Binary prediction markets (YES/NO positions)
+- Prices range from 1¢ to 99¢ (YES + NO = 100¢)
+- Uses contract quantities (not USD amounts)
+- Each contract pays $1 if correct, $0 if wrong
+- Maximum 200,000 open orders per user
+- Stop loss/take profit orders not supported (use conditional logic)
+
+### Webhook Example
+```json
+{
+  "secret": "your-secret",
+  "exchange": "kalshi",
+  "action": "BUY",
+  "symbol": "KXHIGHNY-24JAN01-T60",
+  "side": "YES",
+  "position_size_usd": 100,
+  "stop_loss_percent": 2,
+  "take_profit_percent": 4
+}
+```
+
+### Position Sizing
+- Kalshi uses **contract quantities**, not USD amounts
+- To convert USD to contracts: `contracts = USD_amount / price_per_contract`
+- Example: $100 at 60¢ per contract = 166 contracts (costs $99.60)
+
+### Special Considerations
+- **Sides:** Use `YES` or `NO` instead of `BUY`/`SELL`
+- **Price Format:** Can use cents (1-99) or dollars (0.01-0.99)
+- **Reciprocal Pricing:** YES bid at 60¢ = NO ask at 40¢
+- **Position Tracking:** Positive = YES position, Negative = NO position
+
+For detailed documentation, see [`docs/reference/KALSHI_IMPLEMENTATION.md`](KALSHI_IMPLEMENTATION.md).
 
 ---
 

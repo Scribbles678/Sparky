@@ -59,6 +59,7 @@ Supported Exchanges:
 - [docs/guides/NOTIFICATIONS.md](docs/guides/NOTIFICATIONS.md) – Server-side notifications system
 - [docs/guides/AI_WORKER.md](docs/guides/AI_WORKER.md) – AI Signal Engine setup and configuration
 - [docs/guides/COPY_TRADING.md](docs/guides/COPY_TRADING.md) – Copy trading feature guide
+- [docs/guides/KALSHI_SETUP.md](docs/guides/KALSHI_SETUP.md) – Kalshi exchange setup and credential configuration
 - [docs/guides/alert templates.md](docs/guides/alert%20templates.md) – TradingView alert templates
 
 ### 📖 Reference
