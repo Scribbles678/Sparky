@@ -16,7 +16,7 @@ const { createClient } = require('@supabase/supabase-js');
 const fetch = require('node-fetch');
 const logger = require('../utils/logger');
 const { Groq } = require('groq-sdk');
-const { get1mOHLCV, getUserPositions, calculateIndicators } = require('./utils/marketData');
+const { get1mOHLCV, getUserPositions, calculateIndicators, getOrderBookSnapshot } = require('./utils/marketData');
 const { buildPrompt } = require('./prompts/balanced');
 const { parseDecision } = require('./utils/parser');
 
