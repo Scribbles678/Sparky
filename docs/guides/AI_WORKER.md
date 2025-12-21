@@ -158,24 +158,34 @@ Every 45 seconds, the AI worker:
    SELECT * FROM ai_strategies 
    WHERE status = 'running'
    ```
+   - Loads full strategy object including `config` JSONB
+   - Normalizes config (merges JSONB with columns)
 
 2. **Gets Market Data**
-   - Fetches 100 bars of 1-minute OHLCV data
-   - Calculates indicators (SMA, RSI, etc.)
+   - Fetches market data for all target assets (from config)
+   - Calculates indicators (SMA, RSI, MACD, etc.)
    - Gets current positions for the user
+   - Applies blacklist/whitelist filters (from config)
 
-3. **Calls Groq API**
-   - Builds prompt with market data, indicators, strategy context
-   - Sends to Groq LLM for decision
-   - Parses response: `{ action, symbol, size_usd, confidence, reasoning }`
+3. **Hybrid ML + LLM Decision**
+   - **ML Prediction First**: Calls Arthur ML service (`/predict-strategy`)
+     - Uses strategy-specific model if available
+     - Falls back to global model
+   - **Confidence Check**: Compares ML confidence to threshold (from config)
+   - **Routing Decision**:
+     - If ML confidence >= threshold → Use ML decision (fast, cheap)
+     - If ML confidence < threshold → Use LLM decision (reasoning, edge cases)
+   - **Hybrid Mode**: Configurable split (e.g., 60% LLM, 40% ML)
 
 4. **Processes Decision**
    - **HOLD**: Logs decision, no action
    - **LONG/SHORT/CLOSE**: Sends signal to Sparky webhook
+   - Respects daily trade limit (from config)
 
 5. **Logs Decision**
-   - All decisions logged to `ai_trade_log` table
-   - Includes confidence, reasoning, market data snapshot
+   - All decisions logged to `ai_trade_decisions` table
+   - Includes confidence, reasoning, market data snapshot, model type
+   - Used for ML training and performance analysis
 
 ### Signal Format
 
@@ -300,7 +310,6 @@ CREATE TABLE ai_strategies (
   max_drawdown_percent NUMERIC(5,2) DEFAULT 20.00,
   leverage_max INTEGER DEFAULT 10,
   is_paper_trading BOOLEAN DEFAULT false,
-  copy_override_percent NUMERIC(4,2) DEFAULT 15.00,  -- For copy trading
   is_public_leader BOOLEAN DEFAULT false,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -390,13 +399,15 @@ For the first 24 hours:
 
 Configure weekly trade/loss limits in SignalStudio Trade Settings to prevent over-trading.
 
-## Integration with Copy Trading
+---
 
-When an AI strategy generates a signal:
-1. Leader's trade executes normally
-2. If `source = 'ai_engine_v1'`, copy trading fan-out is triggered
-3. All active followers receive scaled versions of the trade
-4. See [COPY_TRADING.md](COPY_TRADING.md) for details
+## Related Documentation
+
+- [AI Studio Config Integration](../development/AI_STUDIO_CONFIG_INTEGRATION.md) - How Sparky uses AI Studio config
+- [Arthur ML Integration](../development/ARTHUR_ML_INTEGRATION.md) - ML service integration details
+- [Auto-Retrain System](../development/AUTO_RETRAIN_SYSTEM.md) - Self-improvement system
+- [SignalStudio AI Strategies Guide](../../../SignalStudio/signal/docs/guides/AI_STRATEGIES.md) - Creating AI strategies
+- [Troubleshooting Guide](../troubleshooting/COMMON_ISSUES.md) - Common issues
 
 ---
 

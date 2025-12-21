@@ -12,9 +12,10 @@
  * @param {Array} params.priceData - OHLCV candle array
  * @param {Object} params.indicators - Technical indicators
  * @param {Array} params.currentPositions - User's current positions
+ * @param {string} params.customPrompt - Optional custom trading instructions (Phase 1)
  * @returns {string} Formatted prompt
  */
-function buildPrompt({ strategy, priceData, indicators, currentPositions }) {
+function buildPrompt({ strategy, priceData, indicators, currentPositions, customPrompt }) {
   const positionsSummary = currentPositions.length > 0
     ? currentPositions.map(p => 
         `${p.symbol}: ${p.side} ${p.quantity || 0} @ $${p.entry_price || 0} (P&L: $${(p.unrealized_pnl_usd || 0).toFixed(2)})`
@@ -32,6 +33,17 @@ function buildPrompt({ strategy, priceData, indicators, currentPositions }) {
         volume: c.volume.toFixed(2)
       }))
     : [];
+
+  // Phase 1: Build custom instructions section if provided
+  let customInstructions = '';
+  if (customPrompt && customPrompt.trim()) {
+    customInstructions = `
+
+--- CUSTOM TRADING INSTRUCTIONS ---
+${customPrompt.trim()}
+--- END CUSTOM INSTRUCTIONS ---
+`;
+  }
 
   return `You are an elite crypto quant trader with 8 years of experience and a 2.1 Sharpe ratio over 5 years.
 
@@ -52,7 +64,7 @@ RSI: ${indicators.rsi ? indicators.rsi.toFixed(2) : 'N/A'}
 
 Recent price action (last 10 candles):
 ${JSON.stringify(recentCandles, null, 2)}
-
+${customInstructions}
 INSTRUCTIONS:
 1. Analyze the market data and current positions
 2. Decide on action: LONG, SHORT, CLOSE, or HOLD

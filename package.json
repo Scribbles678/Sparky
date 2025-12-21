@@ -28,6 +28,10 @@
     "groq-sdk": "^0.3.0",
     "ioredis": "^5.3.2",
     "node-fetch": "^2.7.0",
+    "oauth": "^0.9.15",
+    "tweetnacl": "^1.0.3",
+    "base64-js": "^1.5.1",
+    "uuid": "^9.0.1",
     "winston": "^3.11.0"
   },
   "devDependencies": {

@@ -36,6 +36,8 @@ module.exports = {
       max_restarts: 10,
       restart_delay: 4000
     }
+    // Note: Arthur ML service should be started separately from its own directory
+    // cd /path/to/Arthur && pm2 start ecosystem.config.js
   ]
 };
 

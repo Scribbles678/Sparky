@@ -101,7 +101,6 @@ Main webhook endpoint for receiving trading alerts from TradingView or SignalStu
 - Subscription limits are checked (monthly webhook quotas)
 - Risk limits are checked (weekly trade/loss limits)
 - User credentials are loaded dynamically from Supabase
-- Copy trading fan-out is triggered automatically for AI strategies
 
 ---
 

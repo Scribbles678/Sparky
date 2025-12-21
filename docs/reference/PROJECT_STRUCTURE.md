@@ -39,7 +39,6 @@ sparky-trading-bot/
 │       ├── calculations.js
 │       ├── notifications.js
 │       ├── redis.js
-│       ├── copyTrading.js        # Copy trading fan-out
 │       ├── riskLimits.js         # Risk limit checks
 │       └── webhookLimits.js      # Webhook limit checks
 │
@@ -249,17 +248,6 @@ Close Signal Received
   - Redis-cached preferences
   - Respects user notification settings
 
-### `src/utils/copyTrading.js` (Copy Trading)
-- **Purpose**: Fan-out leader trades to followers
-- **Key Functions**:
-  - `fanOutToFollowers()` - Executes trades for all active followers
-  - `updateCopiedTradePnl()` - Updates P&L when follower trade closes
-  - `logCopiedTrade()` - Logs copied trades for billing
-- **Features**:
-  - Position size scaling based on allocation %
-  - Max drawdown protection
-  - Async execution (doesn't block leader trade)
-
 ### `src/utils/riskLimits.js` (Risk Management)
 - **Purpose**: Enforce weekly trade/loss limits
 - **Key Functions**:
@@ -290,7 +278,6 @@ Close Signal Received
   - Calls Groq LLM for trading decisions
   - Sends signals to Sparky webhook endpoint
   - Logs all decisions to database
-- **Integration**: Works with copy trading (AI strategies can be leaders)
 
 ### `src/utils/logger.js` (Logging)
 - **Purpose**: Winston-based logging

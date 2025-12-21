@@ -1,969 +1,217 @@
-# Sparky Trading Bot 🚀
+# Sparky Trading Bot - Documentation Index
 
-A headless trading bot that receives TradingView webhook alerts and executes trades on multiple exchanges (Aster DEX, OANDA, Tradier, and 100+ via CCXT) with simple percentage-based stop loss and take profit.
+> **📖 Main Project README:** [../README.md](../README.md)
 
-**Part of the SignalStudio Trading Ecosystem:**
-- **SignalStudio Dashboard** - Real-time analytics, strategy management, and webhook processing (`app.signal-studio.co`)
-- **Sparky Bot** (this repo) - Executes trades on multiple exchanges (VPS/DigitalOcean)
-
-## System Architecture
-
-```
-TradingView Alerts → SignalStudio (/api/webhook) → Sparky Bot → Multiple Exchanges
-                          ↓                              ↓
-                    Redis Cache                    Supabase Database
-                          ↓                              ↑
-                    Supabase Database          SignalStudio Dashboard (Analytics)
-
-Supported Exchanges:
-- Aster DEX (Crypto Futures)
-- OANDA (Forex)
-- Tradier (Stocks/Options)
-- 100+ Crypto Exchanges via CCXT (Binance, Coinbase, Apex, etc.)
-```
-
-**Webhook Flow:**
-- TradingView sends alerts to **SignalStudio** (`https://app.signal-studio.co/api/webhook`)
-- SignalStudio validates webhook secret, builds order from strategy config, forwards to Sparky Bot **asynchronously**
-- Sparky Bot validates per-user secrets from Supabase (in-memory cache, 30s refresh)
-- Sparky Bot executes trade using user's exchange credentials from Supabase
-
-## Features
-
-### Trading Bot (Sparky)
-- 🔔 Receives pre-built orders from SignalStudio (async forwarding) or direct webhooks (legacy)
-- 📊 Executes market/limit orders on multiple exchanges
-- 🛡️ Simple percentage-based stop loss and take profit (% of position value)
-- 📈 Position management (1 position per symbol per user, closes existing before opening new)
-- 💰 Position sizing: SignalStudio order → config.json fallback
-- 🔐 Multi-tenant: Per-user exchange credentials loaded from Supabase
-- 🔐 Per-user webhook secret validation from Supabase (in-memory cache, 30s refresh)
-- 🗄️ Supabase integration: Logs trades/positions, powers SignalStudio dashboard
-- 🧮 Tradier options OTCO flow: Executor + monitor manage entry/TP/SL legs
-- ⚡ Position price updater: Refreshes every 30s, syncs with exchange every 5min
-- 🔒 Rate limiting: 30 req/min per endpoint
-- 🚫 Risk management: Weekly trade/loss limits per exchange (configurable in SignalStudio)
-- 📊 Subscription limits: Monthly webhook limits based on subscription plan (Free/Pro)
-- 🤖 AI Signal Engine: Background worker using Groq LLM to generate trading signals
-- 👥 Copy Trading: Automatic fan-out of leader trades to followers with position scaling
-- 📝 Comprehensive logging with Winston
-- 🔄 Auto-restart with PM2
-
-## Documentation & Maintenance
-
-### 📚 Guides
-- [docs/guides/DEPLOYMENT.md](docs/guides/DEPLOYMENT.md) – VPS deployment guide
-- [docs/guides/TRADINGVIEW.md](docs/guides/TRADINGVIEW.md) – Webhook payload expectations + troubleshooting
-- [docs/guides/MULTI_TENANT.md](docs/guides/MULTI_TENANT.md) – Multi-tenant credential loading from SignalStudio
-- [docs/guides/ORDER_BUILDER_INTEGRATION.md](docs/guides/ORDER_BUILDER_INTEGRATION.md) – How SignalStudio builds orders for Sparky
-- [docs/guides/NOTIFICATIONS.md](docs/guides/NOTIFICATIONS.md) – Server-side notifications system
-- [docs/guides/AI_WORKER.md](docs/guides/AI_WORKER.md) – AI Signal Engine setup and configuration
-- [docs/guides/COPY_TRADING.md](docs/guides/COPY_TRADING.md) – Copy trading feature guide
-- [docs/guides/KALSHI_SETUP.md](docs/guides/KALSHI_SETUP.md) – Kalshi exchange setup and credential configuration
-- [docs/guides/alert templates.md](docs/guides/alert%20templates.md) – TradingView alert templates
-
-### 📖 Reference
-- [docs/reference/API_REFERENCE.md](docs/reference/API_REFERENCE.md) – Complete API endpoint reference
-- [docs/reference/EXCHANGES.md](docs/reference/EXCHANGES.md) – Exchange-specific auth, sizing, and quirks
-- [docs/reference/STRATEGIES.md](docs/reference/STRATEGIES.md) – Strategy metadata, trailing stops, options
-- [docs/reference/PROJECT_STRUCTURE.md](docs/reference/PROJECT_STRUCTURE.md) – Project structure overview
-- [docs/reference/RISK_LIMITS.md](docs/reference/RISK_LIMITS.md) – Risk management and limits
-- [docs/reference/WEBHOOK_LIMITS.md](docs/reference/WEBHOOK_LIMITS.md) – Subscription-based webhook limits
-
-### 🗄️ Database Schema
-- Supabase/SQL migrations live in [`docs/schema/`](docs/schema/).
-
-### 🗺️ Roadmap
-- Future plans and implementation notes in [`docs/roadmap/`](docs/roadmap/).
-
-> **Whenever you change behavior or schema, update the related markdown or SQL in this repo.**  
-> This repository is the single source of truth—no private Notion/Google Docs.
-
-### Dashboard Integration (SignalStudio)
-- 📊 Real-time P&L tracking
-- 📈 Win rate analytics
-- 📉 Cumulative P&L charts
-- 🔴 Live position monitoring
-- 📜 Trade history
-- ⏱️ Auto-refresh every 30 seconds
-- 🎯 Strategy management and order configuration
-- 🔔 Webhook activity monitoring
-
-## Prerequisites
-
-- Node.js v18 or higher
-- Exchange API credentials:
-  - **Aster DEX**: [Get API key](https://www.asterdex.com/)
-  - **OANDA**: [Get API key](https://www.oanda.com/)
-  - **Tradier**: [Get API key](https://tradier.com/)
-  - **CCXT Exchanges**: See [CCXT documentation](https://docs.ccxt.com/) for supported exchanges
-- TradingView account (for webhook alerts)
-- DigitalOcean droplet or VPS (for 24/7 deployment)
-
-## Installation
-
-### 1. Clone & Install Dependencies
-
-```bash
-git clone https://github.com/your-username/sparky-bot.git
-cd sparky-bot
-npm install
-```
-
-### 2. Configure Environment
-
-Copy the example environment file:
-```bash
-cp .env.example .env
-```
-
-Edit `.env` with your credentials:
-```env
-NODE_ENV=production
-PORT=3000
-ASTER_API_KEY=your_actual_api_key
-ASTER_API_SECRET=your_actual_api_secret
-ASTER_API_URL=https://fapi.asterdex.com
-WEBHOOK_SECRET=your_webhook_secret_here
-LOG_LEVEL=info
-```
-
-### 3. Configure Trading Parameters
-
-Copy the example config file:
-```bash
-cp config.json.example config.json
-```
-
-**Multi-Tenant Mode (Recommended):**
-In multi-tenant mode, `config.json` can be minimal - credentials come from SignalStudio:
-```json
-{
-  "webhookSecret": "legacy_fallback_secret"
-}
-```
-
-**Legacy Mode (Single User):**
-For backward compatibility or testing, you can still configure exchanges in `config.json`:
-```json
-{
-  "webhookSecret": "your_webhook_secret_here",
-  "aster": {
-    "apiUrl": "https://fapi.asterdex.com",
-    "apiKey": "your_api_key",
-    "apiSecret": "your_api_secret",
-    "tradeAmount": 600
-  },
-  "oanda": {
-    "accountId": "YOUR_ACCOUNT_ID",
-    "accessToken": "YOUR_TOKEN",
-    "environment": "practice",
-    "tradeAmount": 10000
-  }
-}
-```
-
-**Configuration Notes:**
-- `webhookSecret`: Legacy fallback for direct webhooks (per-user secrets stored in Supabase)
-- `exchange.tradeAmount`: Fallback position size if not provided in SignalStudio order
-- Leverage is set directly on the exchange, not in config
-
-### 4. Configure Supabase Integration (Optional but Recommended)
-
-Add these to your `.env` file for database logging and dashboard integration:
-
-```env
-# Supabase Database (for trade logging & SignalStudio dashboard)
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=your_service_role_key_here
-```
-
-**Why Supabase?**
-- Logs all trades with entry/exit prices and P&L
-- Tracks open positions in real-time
-- Powers the SignalStudio analytics dashboard
-- Enables performance tracking and analysis
-- Stores per-user webhook secrets for validation
-- Stores strategy configurations and order configs
-
-**Get Supabase Credentials:**
-1. Go to https://app.supabase.com
-2. Create a new project or use existing
-3. Go to Settings → API
-4. Copy `URL` and `service_role` key (NOT anon key)
-5. Run the `supabase-schema.sql` to create tables
-
-**Without Supabase:**
-- Bot still works and executes trades
-- No trade history logging or dashboard integration
-- Position price updater & auto-sync services are skipped
-- Trades/events are only written to Winston log files
-
-## Integration with SignalStudio Dashboard
-
-### Overview
-The **SignalStudio Dashboard** is a separate Nuxt 3 application that provides real-time analytics, strategy management, and webhook processing for Sparky bot trades.
-
-**Repository:** `c:\Users\mjjoh\SignalStudio\signal\`  
-**Domain:** `https://app.signal-studio.co`
-
-### How They Work Together
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    TradingView Platform                          │
-│              (User's Trading Strategies)                         │
-└───────────────────────┬─────────────────────────────────────────┘
-                        │ Webhook Alerts
-                        │ POST /api/webhook
-                        ▼
-┌─────────────────────────────────────────────────────────────────┐
-│            SignalStudio Dashboard (Netlify)                      │
-│            Domain: app.signal-studio.co                           │
-│                                                                 │
-│  1. Receives TradingView webhook                                │
-│  2. Validates webhook secret (Redis cached)                     │
-│  3. Builds order from strategy config (Redis cached)            │
-│  4. Forwards to Sparky Bot asynchronously                       │
-│  5. Responds to TradingView immediately (< 1 second)           │
-└───────────────────────┬─────────────────────────────────────────┘
-                        │ Async Forwarding
-                        │ POST /webhook (fire-and-forget)
-                        ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                     Sparky Trading Bot (VPS)                    │
-│                                                                 │
-│  1. Receives pre-built order from SignalStudio                  │
-│  2. Validates webhook secret (per-user from Supabase)          │
-│  3. Executes trade on exchange                                 │
-│  4. Saves position to Supabase (positions table)                │
-│  5. Updates prices every 30s (positionUpdater.js)              │
-│  6. On close: logs to Supabase (trades table)                   │
-└───────────────────────┬─────────────────────────────────────────┘
-                        │ writes to
-                        ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    Supabase Database (Cloud)                    │
-│                                                                 │
-│  Tables:                                                        │
-│  - positions (open positions, updated every 30s)                │
-│  - trades (completed trades with P&L)                           │
-│  - trade_stats (aggregate statistics view)                      │
-│  - webhook_requests (webhook activity logs)                     │
-│  - bot_credentials (per-user webhook secrets)                   │
-└───────────────────────┬─────────────────────────────────────────┘
-                        │ reads from
-                        ▼
-┌─────────────────────────────────────────────────────────────────┐
-│            SignalStudio Dashboard (Netlify)                      │
-│                                                                 │
-│  1. Reads from Supabase (read-only, anon key)                   │
-│  2. Displays real-time positions & P&L                          │
-│  3. Shows cumulative P&L charts                                 │
-│  4. Auto-refreshes every 30 seconds                             │
-│  5. Tracks win rate, trades today, etc.                        │
-│  6. Shows webhook activity logs                                │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Key Files for Integration
-
-**Sparky Bot:**
-- `src/supabaseClient.js` - Database connection & logging functions
-- `src/positionUpdater.js` - Updates position prices every 30s
-- `src/tradeExecutor.js` - Calls savePosition() and logTrade()
-- `src/index.js` - Initializes position updater on startup
-
-**SignalStudio Dashboard:**
-- `app/utils/supabase.ts` - Read-only database client
-- `app/pages/index.vue` - Main dashboard
-- `server/api/webhook/index.ts` - Webhook handler (receives TradingView alerts)
-- `server/services/orderBuilder.ts` - Builds orders from strategy configs
-- `server/utils/redis.ts` - Redis caching for performance
-- `nuxt.config.ts` - Supabase and Redis config
-
-### SignalStudio Dashboard Expectations
-
-- **Repository:** `c:\Users\mjjoh\SignalStudio\signal\` (Nuxt 3 + ShadCN UI frontend, Nitro server routes under `signal/server/api`).
-- **Domain:** `https://app.signal-studio.co` (deployed on Netlify)
-- **Supabase contract:** `signal/app/utils/supabase.ts` is the single source for read/write calls. Anytime we rotate keys or move projects, update that file (and the `.env`) so the dashboard stays in sync.
-- **Shared schema:** Dashboard queries exactly the same tables Sparky writes to (`positions`, `trades`, `trade_stats`, `trade_settings_exchange`, `strategies`, `tradier_option_trades`, `webhook_requests`, `bot_credentials`). Keep the SQL snapshots in both repos aligned; a schema drift will break dashboard auto-refreshes.
-- **Webhook processing:** SignalStudio receives TradingView webhooks at `/api/webhook`, builds orders from strategy configurations, and forwards to Sparky Bot asynchronously.
-- **Redis caching:** SignalStudio uses Redis to cache credentials, subscriptions, strategies, and exchange settings for faster webhook processing.
-- **Bot-facing endpoints:** SignalStudio can call Sparky's HTTP API for health/positions:
-  - `GET /api/sparky/health` – for status cards (optional)
-  - `GET /api/sparky/positions` – used to reconcile Supabase vs. live positions (optional)
-- **Live balances:** Dashboard balance cards (`/api/balance/*`) expect Sparky-side environment variables for Aster, OANDA, Tradier, and Tastytrade to be present so it can proxy those calls. If an exchange is disabled in config, the associated dashboard card will show "Error/Not Connected".
-
-### Data Flow Example
-
-**When Opening a Position:**
-```javascript
-// 1. TradingView sends webhook
-POST /webhook {
-  "action": "buy",
-  "symbol": "BTCUSDT",
-  "stop_loss_percent": 1.5,
-  "take_profit_percent": 4.0
-}
-
-// 2. Bot executes trade (tradeExecutor.js)
-await this.api.placeMarketOrder(symbol, side, quantity)
-
-// 3. Bot saves to Supabase (supabaseClient.js)
-await savePosition({
-  symbol: "BTCUSDT",
-  side: "BUY",
-  entry_price: 95000,
-  quantity: 0.00105,
-  position_size_usd: 100,
-  stop_loss_price: 93575,
-  take_profit_price: 98800,
-  // ...
-})
-
-// 4. Dashboard reads within 30s (supabase.ts)
-const positions = await getOpenPositions()
-// Shows: BTCUSDT, $100, Unrealized P&L: $0
-```
-
-**Every 30 Seconds:**
-```javascript
-// positionUpdater.js automatically:
-const currentPrice = await this.api.getTicker(symbol)
-const unrealizedPnL = calculatePnL(position, currentPrice)
-
-await updatePositionPnL(symbol, currentPrice, unrealizedPnL)
-// Dashboard auto-refreshes and shows updated P&L
-```
-
-**When Closing:**
-```javascript
-// 1. Position hits TP/SL or manual close
-await this.api.closePosition(symbol, side, quantity)
-
-// 2. Bot logs final trade
-await logTrade({
-  symbol: "BTCUSDT",
-  entry_price: 95000,
-  exit_price: 98800,
-  pnl_usd: 4.00,
-  pnl_percent: 4.0,
-  is_winner: true,
-  exit_reason: "TAKE_PROFIT"
-})
-
-// 3. Bot removes from positions
-await removePosition(symbol)
-
-// 4. Dashboard shows in "Recent Trades"
-// Stats update: today's P&L, win rate, etc.
-```
-
-### Database Schema
-
-**positions table** (open positions):
-- `symbol` (unique) - Trading pair
-- `side` - BUY or SELL
-- `entry_price` - Entry price
-- `current_price` - Latest price (updated every 30s)
-- `unrealized_pnl_usd` - Current profit/loss
-- `stop_loss_price`, `take_profit_price`
-- `last_price_update` - Last update timestamp
-
-**trades table** (completed trades):
-- `symbol` - Trading pair
-- `entry_price`, `exit_price`
-- `entry_time`, `exit_time`
-- `pnl_usd`, `pnl_percent`
-- `is_winner` - Boolean
-- `exit_reason` - STOP_LOSS, TAKE_PROFIT, or MANUAL
-
-### Setup SignalStudio Dashboard
-
-See the **Documentation & Maintenance** section above for links to the latest Supabase/schema notes.
-
-**Quick Start:**
-```bash
-# Navigate to dashboard
-cd c:\Users\mjjoh\SignalStudio\signal
-
-# Install dependencies
-npm install
-
-# Add .env file with Supabase credentials
-# SUPABASE_URL=...
-# SUPABASE_ANON_KEY=... (use anon key, NOT service role)
-# REDIS_URL=... (optional but recommended for performance)
-
-# Run dashboard
-npm run dev
-
-# Open http://localhost:3000
-```
-
-## Usage
-
-### Development Mode
-```bash
-npm run dev
-```
-
-### Production Mode
-```bash
-npm start
-```
-
-### With PM2 (Recommended for Production)
-```bash
-pm2 start ecosystem.config.js
-pm2 save
-pm2 startup
-```
-
-## TradingView Webhook Setup
-
-### ⚠️ Important: Webhook URL
-
-**TradingView alerts should go to SignalStudio, not directly to Sparky Bot.**
-
-**Webhook URL:** `https://app.signal-studio.co/api/webhook`
-
-SignalStudio will:
-1. Validate your per-user webhook secret (from Supabase)
-2. Check subscription limits (monthly webhook count)
-3. Build complete order from your strategy configuration
-4. Forward order to Sparky Bot asynchronously
-5. Respond to TradingView immediately (< 1 second)
-
-**Direct webhooks to Sparky Bot** are still supported for backward compatibility but require `exchange` field and use legacy `WEBHOOK_SECRET` validation.
-
-### Understanding Simple TP/SL 💡
-
-**The `stopLoss` and `takeProfit` values are simple price movement percentages.**
-
-With a $100 position:
-- `"stopLoss": 2` → 2% price move against you = **$2 loss**
-- `"takeProfit": 5` → 5% price move in your favor = **$5 profit**
-
-It's that simple! No leverage calculations needed.
-
-### 1. Simple Alert Format (Recommended)
-
-**If you have a strategy configured in SignalStudio:**
-```json
-{
-  "secret": "your-webhook-secret",
-  "strategy": "My Strategy Name",
-  "action": "BUY",
-  "symbol": "ETHUSDT"
-}
-```
-
-SignalStudio will automatically:
-- Look up your strategy configuration
-- Build the complete order (position size, TP/SL, order type)
-- Forward to Sparky Bot
-
-### 2. Full Alert Format (Still Supported)
-
-**For direct webhooks or alert overrides:**
-```json
-{
-  "secret": "your-webhook-secret",
-  "exchange": "aster",
-  "symbol": "ETHUSDT",
-  "action": "BUY",
-  "orderType": "MARKET",
-  "stopLoss": 2,
-  "takeProfit": 5
-}
-```
-
-**Alternative snake_case format:**
-```json
-{
-  "secret": "your-webhook-secret",
-  "exchange": "aster",
-  "symbol": "BTCUSDT",
-  "action": "SELL",
-  "order_type": "market",
-  "stop_loss_percent": 2,
-  "take_profit_percent": 5
-}
-```
-
-**With LIMIT order:**
-```json
-{
-  "secret": "your-webhook-secret",
-  "exchange": "aster",
-  "symbol": "ETHUSDT",
-  "action": "BUY",
-  "orderType": "LIMIT",
-  "price": 3500,
-  "stopLoss": 2,
-  "takeProfit": 5
-}
-```
-
-### 2. Alert Format for Closing Positions
-
-```json
-{
-  "secret": "your-webhook-secret",
-  "exchange": "aster",
-  "action": "CLOSE",
-  "symbol": "ETHUSDT"
-}
-```
-
-### 3. TradingView Pine Script Example
-
-```javascript
-//@version=5
-strategy("Sparky Trading Bot", overlay=true)
-
-// Your strategy logic here
-fastMA = ta.sma(close, 20)
-slowMA = ta.sma(close, 50)
-
-bullSignal = ta.crossover(fastMA, slowMA)
-bearSignal = ta.crossunder(fastMA, slowMA)
-
-if bullSignal
-    strategy.entry("Long", strategy.long)
-    alert('{"secret":"your-webhook-secret","exchange":"aster","symbol":"ETHUSDT","action":"BUY","orderType":"MARKET","stopLoss":2,"takeProfit":5}', alert.freq_once_per_bar)
-
-if bearSignal
-    strategy.entry("Short", strategy.short)
-    alert('{"secret":"your-webhook-secret","exchange":"aster","symbol":"ETHUSDT","action":"SELL","orderType":"MARKET","stopLoss":2,"takeProfit":5}', alert.freq_once_per_bar)
-```
-
-### 4. Webhook URL
-
-**Point your TradingView alerts to SignalStudio:**
-```
-https://app.signal-studio.co/api/webhook
-```
-
-**Note:** Sparky Bot still supports direct webhooks for backward compatibility, but the recommended flow is through SignalStudio for:
-- Strategy-based order configuration
-- Centralized rate limiting
-- Order building from saved configurations
-- Better performance with Redis caching
-
-## API Endpoints
-
-- `POST /webhook` - Receives TradingView alerts (rate limited: 30 req/min)
-- `GET /health` - Health check and bot status
-- `GET /positions` - View current open positions
-
-## Trading Logic Flow
-
-1. **Webhook Received** → Validate secret and payload
-2. **Check Existing Position** → Close if exists for same symbol (waits 1s)
-3. **Check Margin** → Verify sufficient available margin
-4. **Fetch Price** → Get current market price (for MARKET orders)
-5. **Calculate Position Size** → `quantity = tradeAmount / price`
-6. **Open Position** → Execute market/limit order (exchange uses its leverage setting)
-7. **Place Stop Loss** → STOP_MARKET order with reduceOnly
-8. **Place Take Profit** → TAKE_PROFIT_MARKET order with reduceOnly
-9. **Track Position** → Store in memory for management
-
-## Position Sizing & TP/SL Calculation
-
-### Position Size Formula
-
-**When receiving orders from SignalStudio:**
-- Position size comes from `position_size_usd` in the pre-built order
-- SignalStudio calculates this from your strategy configuration
-
-**For direct webhooks (backward compatibility):**
-```javascript
-// Example: $100 position, ETH at $4,000
-const quantity = $100 / $4,000 = 0.025 ETH (rounded to 0.025 for precision)
-```
-
-**That's it!** No leverage multiplication needed. The exchange handles margin requirements based on your leverage settings.
-
-### Simple TP/SL Formula
-
-**For Take Profit:**
-```javascript
-// You want 5% profit on $100 position
-const takeProfitPercent = 5  // 5% price move = $5 profit
-
-// LONG: TP above entry
-takeProfitPrice = entryPrice × (1 + 0.05)  // $4,000 × 1.05 = $4,200
-
-// SHORT: TP below entry
-takeProfitPrice = entryPrice × (1 - 0.05)  // $4,000 × 0.95 = $3,800
-```
-
-**For Stop Loss:**
-```javascript
-// You risk 2% loss on $100 position
-const stopLossPercent = 2  // 2% price move = $2 loss
-
-// LONG: SL below entry
-stopLossPrice = entryPrice × (1 - 0.02)  // $4,000 × 0.98 = $3,920
-
-// SHORT: SL above entry
-stopLossPrice = entryPrice × (1 + 0.02)  // $4,000 × 1.02 = $4,080
-```
-
-### TP/SL Examples with $100 Position
-
-| Entry Price | Stop Loss (2%) | Take Profit (5%) | Risk | Reward | R:R |
-|-------------|----------------|------------------|------|--------|-----|
-| $4,000 | $3,920 (-$2) | $4,200 (+$5) | $2 | $5 | 1:2.5 |
-| $60,000 | $58,800 (-$2) | $63,000 (+$5) | $2 | $5 | 1:2.5 |
-| $150 | $147 (-$2) | $157.50 (+$5) | $2 | $5 | 1:2.5 |
-
-## DigitalOcean Deployment
-
-### 1. Create Droplet
-- **OS:** Ubuntu 22.04 LTS
-- **Plan:** Basic - $6/month (1GB RAM, 25GB SSD) - minimum recommended
-- **Datacenter:** Choose closest to you
-- **Authentication:** SSH keys (recommended) or password
-
-### 2. Initial Server Setup
-
-```bash
-# SSH into droplet
-ssh root@your-droplet-ip
-
-# Update system
-apt update && apt upgrade -y
-
-# Install Node.js v18
-curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-apt-get install -y nodejs
-
-# Verify installation
-node --version  # Should show v18.x
-npm --version
-
-# Install PM2 globally
-npm install -g pm2
-
-# Setup basic firewall
-ufw allow OpenSSH
-ufw allow 80
-ufw allow 443
-ufw --force enable
-```
-
-### 3. Clone and Setup Bot
-
-```bash
-# Create app directory
-mkdir -p /opt/sparky-bot
-cd /opt/sparky-bot
-
-# Clone repository
-git clone https://github.com/your-username/sparky-bot.git .
-
-# Install dependencies
-npm install --production
-
-# Create environment file
-cp .env.example .env
-nano .env  # Edit with your API credentials
-
-# Create config file
-cp config.json.example config.json
-nano config.json  # Edit trading parameters
-
-# Create logs directory
-mkdir -p logs
-```
-
-### 4. Setup Nginx Reverse Proxy (Recommended)
-
-```bash
-# Install Nginx
-apt install nginx -y
-
-# Create Nginx config
-nano /etc/nginx/sites-available/sparky-bot
-```
-
-Add this configuration:
-```nginx
-server {
-    listen 80;
-    server_name your-domain.com;  # or use your IP
-
-    location /webhook {
-        proxy_pass http://localhost:3000/webhook;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_cache_bypass $http_upgrade;
-    }
-
-    location /health {
-        proxy_pass http://localhost:3000/health;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-    }
-}
-```
-
-Enable the site:
-```bash
-ln -s /etc/nginx/sites-available/sparky-bot /etc/nginx/sites-enabled/
-nginx -t  # Test configuration
-systemctl restart nginx
-```
-
-### 5. Start Bot with PM2
-
-```bash
-cd /opt/sparky-bot
-pm2 start ecosystem.config.js
-pm2 save
-pm2 startup  # Follow the instructions to enable auto-start on reboot
-
-# Check status
-pm2 status
-pm2 logs aster-bot --lines 50
-```
-
-### 6. Test Deployment
-
-```bash
-# Local health check
-curl http://localhost:3000/health
-
-# External health check (via Nginx)
-curl http://your-droplet-ip/health
-```
-
-## Monitoring & Maintenance
-
-### View Logs
-```bash
-# PM2 logs
-pm2 logs aster-bot
-
-# Last 50 lines
-pm2 logs aster-bot --lines 50
-
-# Application logs
-tail -f /opt/sparky-bot/logs/combined.log
-tail -f /opt/sparky-bot/logs/error.log
-```
-
-### Check Status
-```bash
-pm2 status
-pm2 monit  # Real-time monitoring
-```
-
-### Health Check
-```bash
-curl http://localhost:3000/health
-```
-
-Response:
-```json
-{
-  "status": "ok",
-  "uptime": 3600,
-  "uptimeFormatted": "1h 0m",
-  "apiStatus": "connected",
-  "balance": 1250.50,
-  "openPositions": 2,
-  "positions": [...],
-  "timestamp": "2025-10-19T12:00:00.000Z"
-}
-```
-
-### Update Bot
-
-```bash
-cd /opt/sparky-bot
-git pull origin main
-npm install --production
-pm2 restart aster-bot
-```
-
-## Security Best Practices
-
-- ✅ Never commit `.env` or `config.json` to git
-- ✅ Use strong webhook secret (min 32 characters)
-- ✅ Restrict Aster API key to droplet IP if possible
-- ✅ Disable withdrawal permissions on Aster API key
-- ✅ Setup UFW firewall (only ports 22, 80, 443)
-- ✅ Use HTTPS in production (Let's Encrypt with Certbot)
-- ✅ Rate limit webhook endpoint (30 req/min by default)
-- ✅ Disable root SSH login after setup
-- ✅ Use SSH keys only (no password authentication)
-- ✅ Keep Node.js and dependencies updated
-- ✅ Monitor logs regularly for suspicious activity
-
-## Error Handling
-
-The bot handles various error scenarios:
-
-| Error Type | Response | Action |
-|------------|----------|--------|
-| Invalid webhook secret | 401 Unauthorized | Alert rejected |
-| Missing required fields | 400 Bad Request | Alert rejected |
-| Insufficient margin | Log error | Skip trade |
-| API failures | Retry 3x | Exponential backoff |
-| Network errors | Log error | Continue operation |
-| Position size precision | Auto-round | Round to 3 decimals |
-| Leverage set failure | Log error | Retry with API call |
-
-## Testing
-
-### Local Testing
-
-1. Start bot in dev mode: `npm run dev`
-2. Use test script:
-
-```bash
-node test/testWebhook.js
-```
-
-### Testing with curl
-
-```bash
-curl -X POST http://localhost:3000/webhook \
-  -H "Content-Type: application/json" \
-  -d '{
-    "secret": "your-webhook-secret",
-    "symbol": "ETHUSDT",
-    "action": "BUY",
-    "orderType": "MARKET",
-    "stopLoss": 2,
-    "takeProfit": 5
-  }'
-```
-
-## File Structure
-
-```
-sparky-bot/
-├── src/
-│   ├── index.js              # Express server & webhook endpoint
-│   ├── asterApi.js           # Aster API client (HMAC SHA256)
-│   ├── tradeExecutor.js      # Trading logic & TP/SL placement
-│   ├── positionTracker.js    # Track open positions in memory
-│   └── utils/
-│       ├── logger.js         # Winston logger configuration
-│       └── calculations.js   # Position size & simple TP/SL calculations
-├── test/
-│   └── testWebhook.js        # Local webhook testing
-├── logs/                     # Log files (auto-created)
-│   ├── combined.log          # All logs
-│   ├── error.log             # Errors only
-│   └── .gitkeep
-├── config.json               # Trading configuration (not in git)
-├── .env                      # Environment variables (not in git)
-├── .env.example              # Template for .env
-├── config.json.example       # Template for config.json
-├── .gitignore
-├── package.json
-├── ecosystem.config.js       # PM2 configuration
-└── docs/                     # Documentation
-    ├── README.md             # Main documentation (this file)
-    ├── guides/               # How-to guides
-    ├── reference/            # Technical reference
-    ├── roadmap/              # Future plans
-    └── schema/               # Database schemas
-```
-
-## Troubleshooting
-
-### Bot not receiving webhooks
-1. Check firewall: `ufw status`
-2. Check Nginx: `systemctl status nginx`
-3. Check bot logs: `pm2 logs aster-bot`
-4. Test locally: `curl http://localhost:3000/health`
-
-### Trades not executing
-1. Check API credentials in `.env`
-2. Verify sufficient margin in Aster account
-3. Check logs for errors: `tail -50 logs/error.log`
-4. Verify leverage is set on the exchange (e.g., 25x for max)
-
-### TP/SL triggering too fast/slow
-- Values are simple **price movement percentages**
-- `stopLoss: 2` = 2% price move against you
-- `takeProfit: 5` = 5% price move in your favor
-- Adjust based on asset volatility and your risk tolerance
-
-### Signature errors
-- Verify API key and secret are correct
-- Check that `ASTER_API_URL` is `https://fapi.asterdex.com`
-- Ensure system time is synchronized: `timedatectl`
-
-## Implemented Features
-
-- [x] Web dashboard for position monitoring (SignalStudio Dashboard - deployed!)
-- [x] Database for trade history and analytics (Supabase - implemented)
-- [x] Multiple account support (Multi-tenant per-user credentials)
-- [x] Dynamic position sizing based on account balance (Strategy configs)
-- [x] Trailing stops (OANDA support)
-- [x] Webhook signature verification (Per-user secrets from Supabase)
-- [x] AI Signal Engine (Groq LLM-based trading signals)
-- [x] Copy Trading (Automatic trade replication with position scaling)
-- [x] Risk Management (Weekly trade/loss limits per exchange)
-- [x] Subscription Limits (Monthly webhook limits by plan)
-
-## Future Enhancements
-
-- [ ] Telegram bot integration for trade alerts
-- [ ] Backtesting mode with historical data
-- [ ] Break-even automation after TP1
-- [ ] Multiple TP levels (TP1, TP2, TP3)
-- [ ] ATR-based stop loss calculation
-- [ ] TastyTrade futures integration
-
-## Support & Documentation
-
-For issues with:
-- **Aster API**: Check [Aster API Docs](https://fapi.asterdex.com) or contact support
-- **TradingView Webhooks**: See [TradingView Documentation](https://www.tradingview.com/support/solutions/43000529348-i-want-to-know-more-about-webhooks/)
-- **Bot Issues**: Check logs with `pm2 logs aster-bot`
-
-## Contributing
-
-Contributions are welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
-
-## License
-
-MIT License - see LICENSE file for details
-
-## Disclaimer
-
-⚠️ **IMPORTANT RISK DISCLAIMER**
-
-- Trading cryptocurrency futures involves substantial risk of loss
-- This bot is provided as-is with NO guarantees or warranties
-- Past performance does not indicate future results
-- Always test with SMALL amounts first
-- Never trade more than you can afford to lose
-- The developers assume NO liability for trading losses
-- Use at your own risk
-
-**Remember:** Leverage amplifies both gains AND losses. Always use appropriate stop losses and never risk more than you can afford to lose.
+This is the documentation hub for Sparky Trading Bot. Use this index to navigate all guides, references, and development documentation.
 
 ---
 
-**Version:** 1.1  
-**Last Updated:** December 2025
+## 🎯 Quick Navigation
+
+**New to Sparky?** Start here:
+
+1. **[Main README](../README.md)** - Project overview and quick start
+2. **[Deployment Guide](guides/DEPLOYMENT.md)** - Deploy to VPS
+3. **[TradingView Setup](guides/TRADINGVIEW.md)** - Webhook configuration
+4. **[AI Worker Guide](guides/AI_WORKER.md)** - AI Signal Engine setup
+
+---
+
+## 📚 Documentation Structure
+
+### 🚀 Getting Started
+
+- **[Main README](../README.md)** - Project overview and quick start
+- **[Deployment Guide](guides/DEPLOYMENT.md)** - VPS deployment
+- **[TradingView Setup](guides/TRADINGVIEW.md)** - Webhook configuration
+- **[Multi-Tenant Guide](guides/MULTI_TENANT.md)** - Multi-user setup
+
+### 📖 Reference (`reference/`)
+
+Technical reference documentation:
+
+- **[API Reference](reference/API_REFERENCE.md)** - All API endpoints
+- **[Project Structure](reference/PROJECT_STRUCTURE.md)** - Code organization
+- **[Exchanges](reference/EXCHANGES.md)** - Exchange integrations and details
+- **[Strategies](reference/STRATEGIES.md)** - Strategy metadata and configuration
+- **[Risk Limits](reference/RISK_LIMITS.md)** - Risk management
+- **[Webhook Limits](reference/WEBHOOK_LIMITS.md)** - Subscription-based limits
+- **Exchange Implementation Guides:**
+  - [Aster](reference/ALPACA_IMPLEMENTATION.md), [OANDA](reference/CAPITAL_IMPLEMENTATION.md), [Tradier](reference/ETRADE_IMPLEMENTATION.md)
+  - [100+ CCXT Exchanges](reference/EXCHANGES.md)
+
+### 📘 Guides (`guides/`)
+
+Step-by-step guides:
+
+- **[AI Worker](guides/AI_WORKER.md)** - AI Signal Engine setup and ML integration
+- **[Order Builder Integration](guides/ORDER_BUILDER_INTEGRATION.md)** - SignalStudio order building
+- **[Notifications](guides/NOTIFICATIONS.md)** - Server-side notifications
+- **[Kalshi Setup](guides/KALSHI_SETUP.md)** - Kalshi exchange setup
+- **[Alert Templates](guides/alert%20templates.md)** - TradingView alert templates
+
+### 💻 Development (`development/`)
+
+Developer documentation:
+
+- **[AI Studio Config Integration](development/AI_STUDIO_CONFIG_INTEGRATION.md)** - How Sparky uses AI Studio config
+- **[Arthur ML Integration](development/ARTHUR_ML_INTEGRATION.md)** - ML service integration
+- **[Auto-Retrain System](development/AUTO_RETRAIN_SYSTEM.md)** - Self-improvement system
+
+### 🐛 Troubleshooting (`troubleshooting/`)
+
+- **[Common Issues](troubleshooting/COMMON_ISSUES.md)** - Troubleshooting guide
+
+---
+
+## 🎯 Common Tasks
+
+### For Users
+
+- **Deploy Sparky** → [Deployment Guide](guides/DEPLOYMENT.md)
+- **Set Up TradingView** → [TradingView Guide](guides/TRADINGVIEW.md)
+- **Configure AI Strategies** → [AI Worker Guide](guides/AI_WORKER.md)
+
+### For Developers
+
+- **Understand Architecture** → [Project Structure](reference/PROJECT_STRUCTURE.md)
+- **API Endpoints** → [API Reference](reference/API_REFERENCE.md)
+- **Exchange Integration** → [Exchanges Reference](reference/EXCHANGES.md)
+- **AI Studio Integration** → [AI Studio Config Integration](development/AI_STUDIO_CONFIG_INTEGRATION.md)
+- **ML Integration** → [Arthur ML Integration](development/ARTHUR_ML_INTEGRATION.md)
+
+### For Operations
+
+- **Deploy to Production** → [Deployment Guide](guides/DEPLOYMENT.md)
+- **Monitor Health** → [API Reference](reference/API_REFERENCE.md#health-check)
+- **Troubleshoot Issues** → [Troubleshooting Guide](troubleshooting/COMMON_ISSUES.md)
+
+---
+
+## 📋 Documentation by Topic
+
+### Trading & Execution
+
+- [TradingView Setup](guides/TRADINGVIEW.md) - Webhook configuration
+- [Order Builder Integration](guides/ORDER_BUILDER_INTEGRATION.md) - SignalStudio integration
+- [Exchanges Reference](reference/EXCHANGES.md) - Exchange details
+- [API Reference](reference/API_REFERENCE.md) - Trade endpoints
+
+### AI & Machine Learning
+
+- [AI Worker Guide](guides/AI_WORKER.md) - AI Signal Engine
+- [AI Studio Config Integration](development/AI_STUDIO_CONFIG_INTEGRATION.md) - Config system
+- [Arthur ML Integration](development/ARTHUR_ML_INTEGRATION.md) - ML service
+- [Auto-Retrain System](development/AUTO_RETRAIN_SYSTEM.md) - Self-improvement
+
+### Risk Management
+
+- [Risk Limits](reference/RISK_LIMITS.md) - Risk management
+- [Webhook Limits](reference/WEBHOOK_LIMITS.md) - Subscription limits
+- [Multi-Tenant Guide](guides/MULTI_TENANT.md) - Multi-user setup
+
+### Deployment & Operations
+
+- [Deployment Guide](guides/DEPLOYMENT.md) - Production deployment
+- [Troubleshooting](troubleshooting/COMMON_ISSUES.md) - Common issues
+- [Notifications](guides/NOTIFICATIONS.md) - Notification system
+
+---
+
+## 📁 File Structure
+
+```
+docs/
+├── README.md (this file)
+│
+├── guides/
+│   ├── AI_WORKER.md
+│   ├── DEPLOYMENT.md
+│   ├── MULTI_TENANT.md
+│   ├── NOTIFICATIONS.md
+│   ├── ORDER_BUILDER_INTEGRATION.md
+│   ├── TRADINGVIEW.md
+│   ├── KALSHI_SETUP.md
+│   └── alert templates.md
+│
+├── reference/
+│   ├── API_REFERENCE.md
+│   ├── PROJECT_STRUCTURE.md
+│   ├── EXCHANGES.md
+│   ├── STRATEGIES.md
+│   ├── RISK_LIMITS.md
+│   ├── WEBHOOK_LIMITS.md
+│   └── [Exchange Implementation Guides]
+│
+├── development/
+│   ├── AI_STUDIO_CONFIG_INTEGRATION.md
+│   ├── ARTHUR_ML_INTEGRATION.md
+│   └── AUTO_RETRAIN_SYSTEM.md
+│
+├── troubleshooting/
+│   └── COMMON_ISSUES.md
+│
+├── schema/
+│   └── [SQL migration files]
+│
+└── roadmap/
+    └── [Future plans]
+```
+
+---
+
+## 🔍 Finding What You Need
+
+### "I want to..."
+
+- **Deploy Sparky** → [Deployment Guide](guides/DEPLOYMENT.md)
+- **Set up TradingView webhooks** → [TradingView Guide](guides/TRADINGVIEW.md)
+- **Configure AI strategies** → [AI Worker Guide](guides/AI_WORKER.md)
+- **Understand the API** → [API Reference](reference/API_REFERENCE.md)
+- **Integrate with SignalStudio** → [Order Builder Integration](guides/ORDER_BUILDER_INTEGRATION.md)
+- **Set up ML predictions** → [Arthur ML Integration](development/ARTHUR_ML_INTEGRATION.md)
+- **Troubleshoot issues** → [Troubleshooting Guide](troubleshooting/COMMON_ISSUES.md)
+- **Understand architecture** → [Project Structure](reference/PROJECT_STRUCTURE.md)
+
+---
+
+## 🔄 Documentation Updates
+
+This documentation is actively maintained. When updating:
+
+1. **Update the relevant guide** in the appropriate folder
+2. **Update this README** if structure changes
+3. **Update cross-references** in related docs
+4. **Keep paths accurate** - use relative paths from docs root
+
+---
+
+## 📞 Need Help?
+
+- **Setup Issues** → Check [Deployment Guide](guides/DEPLOYMENT.md) and [TradingView Guide](guides/TRADINGVIEW.md)
+- **API Questions** → See [API Reference](reference/API_REFERENCE.md)
+- **Integration Questions** → See [Order Builder Integration](guides/ORDER_BUILDER_INTEGRATION.md)
+- **Troubleshooting** → See [Troubleshooting Guide](troubleshooting/COMMON_ISSUES.md)
+
+---
+
+## 🎯 Documentation Status
+
+- ✅ **User Guides** - Complete
+- ✅ **API Reference** - Complete
+- ✅ **Exchange Documentation** - Complete
+- ✅ **AI/ML Integration** - Complete
+- ✅ **Deployment** - Complete
+- ✅ **Troubleshooting** - Complete
+
+---
+
+## 🔗 Related Documentation
+
+- **SignalStudio Dashboard:** [`C:\Users\mjjoh\SignalStudio\signal\docs`](../../../SignalStudio/signal/docs/README.md)
+- **Arthur ML Service:** [`C:\Users\mjjoh\Arthur\docs`](../../../Arthur/docs/README.md)
+
+---
+
+**Last Updated:** December 21, 2025  
+**Version:** 2.1 (Consolidated with main README)

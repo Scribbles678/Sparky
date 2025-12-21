@@ -454,3 +454,4 @@ module.exports = {
   calculateIndicators,
   getOrderBookSnapshot
 };
+

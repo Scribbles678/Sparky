@@ -384,6 +384,69 @@ function notifyWebhookLimitReached(userId, currentCount, limit, plan) {
   });
 }
 
+// ============================================================================
+// AI IDEAS NOTIFICATIONS
+// ============================================================================
+
+/**
+ * New AI trading idea generated
+ */
+function notifyAIIdea(userId, ideaId, symbol, action, confidence, entryPrice) {
+  const priceInfo = entryPrice ? ` at $${entryPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : '';
+  
+  return createNotification({
+    userId,
+    type: 'info',
+    title: `💡 New AI Idea: ${symbol} ${action}`,
+    message: `AI generated a ${confidence.toFixed(0)}% confidence ${action} signal for ${symbol}${priceInfo}. View on AI Ideas page.`,
+    metadata: { 
+      ideaId,
+      symbol, 
+      action, 
+      confidence,
+      entryPrice,
+      link: '/ai-ideas'
+    },
+    preferenceKey: 'notify_ai_ideas',
+  });
+}
+
+// ============================================================================
+// ML PRE-TRADE VALIDATION NOTIFICATIONS
+// ============================================================================
+
+/**
+ * Trade blocked by ML validation
+ */
+function notifyTradeBlocked(userId, data) {
+  const reasonsList = data.reasons && data.reasons.length > 0 
+    ? data.reasons.join(', ') 
+    : 'low confidence';
+  
+  const message = [
+    `${data.symbol} ${data.action} signal blocked by ML validation`,
+    `Confidence: ${data.confidence}% (threshold: ${data.threshold}%)`,
+    `Reasons: ${reasonsList}`
+  ].join(' • ');
+
+  return createNotification({
+    userId,
+    type: 'warning',
+    title: `🛡️ Trade Blocked: ${data.strategy_name}`,
+    message,
+    metadata: {
+      strategy_name: data.strategy_name,
+      symbol: data.symbol,
+      action: data.action,
+      confidence: data.confidence,
+      threshold: data.threshold,
+      reasons: data.reasons,
+      link: '/strategies'
+    },
+    preferenceKey: 'notify_trade_failed', // Reuse existing preference
+  });
+}
+
 module.exports = {
   createNotification,
   getUserPreferences,
@@ -406,5 +469,9 @@ module.exports = {
   // Webhook limits
   notifyWebhookLimitWarning,
   notifyWebhookLimitReached,
+  // AI Ideas
+  notifyAIIdea,
+  // ML Pre-Trade Validation
+  notifyTradeBlocked,
 };
 

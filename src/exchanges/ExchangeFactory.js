@@ -13,6 +13,15 @@ const TradierAPI = require('./tradierApi');
 const TradierOptionsAPI = require('./tradierOptionsApi');
 const CCXTExchangeAPI = require('./ccxtExchangeApi');
 const KalshiAPI = require('./kalshiApi');
+const AlpacaAPI = require('./alpacaApi');
+const CapitalAPI = require('./capitalApi');
+const RobinhoodAPI = require('./robinhoodApi');
+const Trading212API = require('./trading212Api');
+const LimeAPI = require('./limeApi');
+const PublicAPI = require('./publicApi');
+const WebullAPI = require('./webullApi');
+const TradeStationAPI = require('./tradestationApi');
+// const EtradeAPI = require('./etradeApi'); // Disabled - OAuth 1.0 with daily expiration is too burdensome
 const logger = require('../utils/logger');
 const { getUserExchangeCredentials } = require('../supabaseClient');
 
@@ -78,6 +87,113 @@ class ExchangeFactory {
           config.privateKey,
           config.environment || 'production'
         );
+
+      case 'alpaca':
+        if (!config.apiKey || !config.apiSecret) {
+          throw new Error('Alpaca requires apiKey and apiSecret');
+        }
+        return new AlpacaAPI(
+          config.apiKey,
+          config.apiSecret,
+          config.environment || 'production'
+        );
+
+      case 'capital':
+        if (!config.apiKey || !config.login || !config.password) {
+          throw new Error('Capital.com requires apiKey, login, and password');
+        }
+        return new CapitalAPI(
+          config.apiKey,
+          config.login,
+          config.password,
+          config.accountId || null,
+          config.environment || 'production'
+        );
+
+      case 'robinhood':
+        if (!config.apiKey || !config.privateKey) {
+          throw new Error('Robinhood Crypto requires apiKey and privateKey (Ed25519)');
+        }
+        return new RobinhoodAPI(
+          config.apiKey,
+          config.privateKey,
+          config.environment || 'production'
+        );
+
+      case 'trading212':
+        if (!config.apiKey || !config.apiSecret) {
+          throw new Error('Trading212 requires apiKey and apiSecret');
+        }
+        return new Trading212API(
+          config.apiKey,
+          config.apiSecret,
+          config.environment || 'production'
+        );
+
+      case 'lime':
+        if (!config.clientId || !config.clientSecret || !config.username || !config.password) {
+          throw new Error('Lime requires clientId, clientSecret, username, and password');
+        }
+        return new LimeAPI(
+          config.clientId,
+          config.clientSecret,
+          config.username,
+          config.password,
+          config.accountNumber || null,
+          config.environment || 'production'
+        );
+
+      case 'public':
+        if (!config.secretKey) {
+          throw new Error('Public.com requires secretKey');
+        }
+        return new PublicAPI(
+          config.secretKey,
+          config.accountId || null,
+          config.tokenValidityMinutes || 1440,
+          config.environment || 'production'
+        );
+
+      case 'webull':
+        if (!config.appKey || !config.appSecret) {
+          throw new Error('Webull requires appKey and appSecret');
+        }
+        return new WebullAPI(
+          config.appKey,
+          config.appSecret,
+          config.accountId || null,
+          config.regionId || 'us',
+          config.environment || 'production'
+        );
+
+      case 'tradestation':
+        if (!config.clientId || !config.clientSecret || !config.refreshToken) {
+          throw new Error('TradeStation requires clientId, clientSecret, and refreshToken');
+        }
+        return new TradeStationAPI(
+          config.clientId,
+          config.clientSecret,
+          config.refreshToken,
+          config.accountId || null,
+          config.environment || 'production'
+        );
+
+      // E*TRADE disabled - OAuth 1.0 with daily token expiration is too burdensome for users
+      // case 'etrade':
+      //   if (!config.consumerKey || !config.consumerSecret) {
+      //     throw new Error('E*TRADE requires consumerKey and consumerSecret');
+      //   }
+      //   if (!config.accessToken || !config.accessTokenSecret) {
+      //     throw new Error('E*TRADE requires accessToken and accessTokenSecret (complete OAuth flow)');
+      //   }
+      //   return new EtradeAPI(
+      //     config.consumerKey,
+      //     config.consumerSecret,
+      //     config.accessToken,
+      //     config.accessTokenSecret,
+      //     config.accountIdKey || null,
+      //     config.environment || 'production'
+      //   );
       
       default:
         // Try CCXT for any other exchange (apex, binance, coinbase, etc.)
@@ -87,7 +203,7 @@ class ExchangeFactory {
         } catch (ccxtError) {
           throw new Error(
             `Unknown exchange: ${exchangeName}. ` +
-            `Custom exchanges: aster, oanda, tradier, tradier_options, kalshi. ` +
+            `Custom exchanges: aster, oanda, tradier, tradier_options, kalshi, alpaca, capital, robinhood, trading212, lime, public, webull, tradestation. ` +
             `CCXT error: ${ccxtError.message}`
           );
         }
@@ -151,6 +267,96 @@ class ExchangeFactory {
         logger.warn(`⚠️  Failed to initialize Kalshi: ${error.message}`);
       }
     }
+
+    // Create Alpaca instance if configured
+    if (fullConfig.alpaca && fullConfig.alpaca.apiKey) {
+      try {
+        exchanges.alpaca = this.createExchange('alpaca', fullConfig.alpaca);
+        logger.info('✅ Alpaca API initialized');
+      } catch (error) {
+        logger.warn(`⚠️  Failed to initialize Alpaca: ${error.message}`);
+      }
+    }
+
+    // Create Capital.com instance if configured
+    if (fullConfig.capital && fullConfig.capital.apiKey) {
+      try {
+        exchanges.capital = this.createExchange('capital', fullConfig.capital);
+        logger.info('✅ Capital.com API initialized');
+      } catch (error) {
+        logger.warn(`⚠️  Failed to initialize Capital.com: ${error.message}`);
+      }
+    }
+
+    // Create Robinhood Crypto instance if configured
+    if (fullConfig.robinhood && fullConfig.robinhood.apiKey) {
+      try {
+        exchanges.robinhood = this.createExchange('robinhood', fullConfig.robinhood);
+        logger.info('✅ Robinhood Crypto API initialized');
+      } catch (error) {
+        logger.warn(`⚠️  Failed to initialize Robinhood Crypto: ${error.message}`);
+      }
+    }
+
+    // Create Trading212 instance if configured
+    if (fullConfig.trading212 && fullConfig.trading212.apiKey) {
+      try {
+        exchanges.trading212 = this.createExchange('trading212', fullConfig.trading212);
+        logger.info('✅ Trading212 API initialized');
+      } catch (error) {
+        logger.warn(`⚠️  Failed to initialize Trading212: ${error.message}`);
+      }
+    }
+
+    // Create Lime instance if configured
+    if (fullConfig.lime && fullConfig.lime.clientId) {
+      try {
+        exchanges.lime = this.createExchange('lime', fullConfig.lime);
+        logger.info('✅ Lime Trading API initialized');
+      } catch (error) {
+        logger.warn(`⚠️  Failed to initialize Lime Trading: ${error.message}`);
+      }
+    }
+
+    // Create Public.com instance if configured
+    if (fullConfig.public && fullConfig.public.secretKey) {
+      try {
+        exchanges.public = this.createExchange('public', fullConfig.public);
+        logger.info('✅ Public.com API initialized');
+      } catch (error) {
+        logger.warn(`⚠️  Failed to initialize Public.com: ${error.message}`);
+      }
+    }
+
+    // Create Webull instance if configured
+    if (fullConfig.webull && fullConfig.webull.appKey) {
+      try {
+        exchanges.webull = this.createExchange('webull', fullConfig.webull);
+        logger.info('✅ Webull API initialized');
+      } catch (error) {
+        logger.warn(`⚠️  Failed to initialize Webull: ${error.message}`);
+      }
+    }
+
+    // Create TradeStation instance if configured
+    if (fullConfig.tradestation && fullConfig.tradestation.refreshToken) {
+      try {
+        exchanges.tradestation = this.createExchange('tradestation', fullConfig.tradestation);
+        logger.info('✅ TradeStation API initialized');
+      } catch (error) {
+        logger.warn(`⚠️  Failed to initialize TradeStation: ${error.message}`);
+      }
+    }
+
+    // E*TRADE disabled - OAuth 1.0 with daily token expiration is too burdensome
+    // if (fullConfig.etrade && fullConfig.etrade.consumerKey) {
+    //   try {
+    //     exchanges.etrade = this.createExchange('etrade', fullConfig.etrade);
+    //     logger.info('✅ E*TRADE API initialized');
+    //   } catch (error) {
+    //     logger.warn(`⚠️  Failed to initialize E*TRADE: ${error.message}`);
+    //   }
+    // }
     
     return exchanges;
   }
@@ -161,7 +367,7 @@ class ExchangeFactory {
    */
   static getSupportedExchanges() {
     // Custom exchanges + CCXT exchanges (100+)
-    const customExchanges = ['aster', 'oanda', 'tradier', 'tradier_options', 'kalshi'];
+    const customExchanges = ['aster', 'oanda', 'tradier', 'tradier_options', 'kalshi', 'alpaca', 'capital', 'robinhood', 'trading212', 'lime', 'public', 'webull', 'tradestation'];
     
     // Get CCXT exchanges (dynamically)
     try {
@@ -261,6 +467,116 @@ class ExchangeFactory {
           privateKey: credentials.apiSecret, // Private key goes in api_secret field
           environment: credentials.environment || 'production',
         };
+
+      case 'alpaca':
+        return {
+          apiKey: credentials.apiKey,
+          apiSecret: credentials.apiSecret,
+          environment: credentials.environment || 'production',
+        };
+
+      case 'capital':
+        // Capital.com uses API key, login, and password
+        const extra = credentials.extra || credentials.extra_metadata || {};
+        return {
+          apiKey: credentials.apiKey,
+          login: extra.login || extra.username || credentials.login,
+          password: credentials.apiSecret, // API key password stored in api_secret field
+          accountId: extra.accountId || null, // Optional, auto-fetched from session
+          environment: credentials.environment || 'production',
+        };
+
+      case 'robinhood':
+        // Robinhood Crypto uses API key and Ed25519 private key
+        return {
+          apiKey: credentials.apiKey,
+          privateKey: credentials.apiSecret, // Ed25519 private key (Base64) stored in api_secret field
+          environment: credentials.environment || 'production',
+        };
+
+      case 'trading212':
+        // Trading212 uses API key and API secret (HTTP Basic Auth)
+        return {
+          apiKey: credentials.apiKey,
+          apiSecret: credentials.apiSecret,
+          environment: credentials.environment || 'production',
+        };
+
+      case 'lime':
+        // Lime uses OAuth 2.0 password flow
+        // Requires: client_id, client_secret, username, password
+        // Storage: client_id → api_key, client_secret → api_secret, username/password → extra_metadata
+        const limeExtra = credentials.extra || credentials.extra_metadata || {};
+        if (!credentials.apiKey || !credentials.apiSecret || !limeExtra.username || !limeExtra.password) {
+          throw new Error('Lime requires client_id (api_key), client_secret (api_secret), username (extra_metadata), and password (extra_metadata)');
+        }
+        return {
+          clientId: credentials.apiKey, // Client ID stored in api_key field
+          clientSecret: credentials.apiSecret, // Client Secret stored in api_secret field
+          username: limeExtra.username, // Username stored in extra_metadata.username
+          password: limeExtra.password, // Password stored in extra_metadata.password
+          accountNumber: limeExtra.accountNumber || credentials.accountNumber || null, // Optional, auto-detected
+          environment: credentials.environment || 'production',
+        };
+
+      case 'public':
+        // Public.com uses secret key → access token flow
+        // Storage: secret_key → api_key
+        const publicExtra = credentials.extra || credentials.extra_metadata || {};
+        if (!credentials.apiKey) {
+          throw new Error('Public.com requires secretKey (api_key)');
+        }
+        return {
+          secretKey: credentials.apiKey, // Secret key stored in api_key field
+          accountId: publicExtra.accountId || credentials.accountId || null, // Optional, auto-detected
+          tokenValidityMinutes: publicExtra.tokenValidityMinutes || 1440, // Default 24 hours
+          environment: credentials.environment || 'production',
+        };
+
+      case 'webull':
+        // Webull uses HMAC-SHA1 signature with App Key and App Secret
+        // Storage: app_key → api_key, app_secret → api_secret
+        const webullExtra = credentials.extra || credentials.extra_metadata || {};
+        if (!credentials.apiKey || !credentials.apiSecret) {
+          throw new Error('Webull requires appKey (api_key) and appSecret (api_secret)');
+        }
+        return {
+          appKey: credentials.apiKey, // App Key stored in api_key field
+          appSecret: credentials.apiSecret, // App Secret stored in api_secret field
+          accountId: webullExtra.accountId || credentials.accountId || null, // Optional, auto-detected
+          regionId: webullExtra.regionId || credentials.regionId || 'us', // Default: US
+          environment: credentials.environment || 'production',
+        };
+
+      case 'tradestation':
+        // TradeStation uses OAuth 2.0 Authorization Code Flow
+        // Storage: client_id → api_key, client_secret → api_secret, refresh_token → extra_metadata
+        const tsExtra = credentials.extra || credentials.extra_metadata || {};
+        if (!credentials.apiKey || !credentials.apiSecret) {
+          throw new Error('TradeStation requires clientId (api_key) and clientSecret (api_secret)');
+        }
+        if (!tsExtra.refreshToken && !credentials.refreshToken) {
+          throw new Error('TradeStation requires refreshToken (stored in extra_metadata.refreshToken)');
+        }
+        return {
+          clientId: credentials.apiKey, // Client ID stored in api_key field
+          clientSecret: credentials.apiSecret, // Client Secret stored in api_secret field
+          refreshToken: tsExtra.refreshToken || credentials.refreshToken, // Refresh token from OAuth flow
+          accountId: tsExtra.accountId || credentials.accountId || null, // Optional, auto-detected
+          environment: credentials.environment || 'production', // 'production' or 'sim'
+        };
+
+      // E*TRADE disabled - OAuth 1.0 with daily token expiration is too burdensome
+      // case 'etrade':
+      //   const extra = credentials.extra || credentials.extra_metadata || {};
+      //   return {
+      //     consumerKey: credentials.apiKey,
+      //     consumerSecret: credentials.apiSecret,
+      //     accessToken: extra.accessToken,
+      //     accessTokenSecret: extra.accessTokenSecret,
+      //     accountIdKey: extra.accountIdKey || null,
+      //     environment: credentials.environment || 'production',
+      //   };
       
       default:
         // Try CCXT exchange (apex, binance, coinbase, etc.)

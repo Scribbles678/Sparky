@@ -18,6 +18,7 @@ const {
   notifyTradeFailed,
   notifyPositionClosedProfit,
   notifyPositionClosedLoss,
+  notifyTradeBlocked,
 } = require('./utils/notifications');
 
 class TradeExecutor {
@@ -48,8 +49,162 @@ class TradeExecutor {
       'tradier_options': 'options',
       'tastytrade': 'futures',
       'kalshi': 'prediction',
+      'alpaca': 'stocks',
+      'capital': 'crypto', // Capital.com supports CFDs, stocks, forex, crypto, commodities
+      'robinhood': 'crypto', // Robinhood Crypto is crypto-only
+      'trading212': 'stocks', // Trading212 supports stocks and ETFs (Invest and Stocks ISA accounts)
+      'lime': 'stocks', // Lime supports stocks and options (US equities)
+      'public': 'stocks', // Public.com supports stocks and options
+      'webull': 'stocks', // Webull supports stocks and ETFs (US market)
+      'tradestation': 'stocks', // TradeStation supports stocks, options, and futures
+      // 'etrade': 'stocks', // Disabled - OAuth 1.0 with daily expiration is too burdensome
     };
     return exchangeAssetMap[this.exchange] || 'crypto';
+  }
+
+  /**
+   * Get current market context for ML validation
+   * @param {string} symbol - Trading symbol
+   * @param {string} exchange - Exchange name
+   * @returns {Promise<Object>} Market context data
+   */
+  async getMarketContext(symbol, exchange) {
+    try {
+      const ticker = await this.api.fetchTicker(symbol);
+      
+      return {
+        current_price: ticker.last || ticker.close,
+        volume: ticker.quoteVolume || ticker.baseVolume,
+        timestamp: new Date().toISOString(),
+        exchange,
+        symbol
+      };
+    } catch (error) {
+      logger.warn(`[ML VALIDATION] Could not fetch market context: ${error.message}`);
+      return {
+        current_price: null,
+        volume: null,
+        timestamp: new Date().toISOString(),
+        exchange,
+        symbol
+      };
+    }
+  }
+
+  /**
+   * Validate trade signal using ML Pre-Trade Validation
+   * @param {Object} strategy - Strategy object from Supabase
+   * @param {Object} alertData - Webhook alert data
+   * @param {Object} marketContext - Current market conditions
+   * @returns {Promise<Object>} { allowed: boolean, confidence: number, reasons: string[] }
+   */
+  async validateWithML(strategy, alertData, marketContext) {
+    const ARTHUR_ML_URL = process.env.ARTHUR_ML_URL || 'http://localhost:8001';
+    
+    try {
+      logger.info(`[ML VALIDATION] Checking signal for strategy "${strategy.name}"...`);
+      
+      const response = await fetch(`${ARTHUR_ML_URL}/validate-strategy-signal`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          strategy_id: strategy.id,
+          user_id: strategy.user_id,
+          symbol: alertData.symbol,
+          action: alertData.action,
+          price: marketContext.current_price,
+          timestamp: new Date().toISOString(),
+        }),
+        timeout: 5000, // 5 second timeout
+      });
+
+      if (!response.ok) {
+        logger.error(`[ML VALIDATION] Arthur ML service error: ${response.status}`);
+        // Fail open: allow trade if ML service is down
+        return {
+          allowed: true,
+          confidence: null,
+          reasons: ['ML service unavailable - trade allowed by default'],
+          error: true
+        };
+      }
+
+      const result = await response.json();
+      
+      const threshold = strategy.ml_config?.confidence_threshold || 70;
+      const allowed = result.confidence >= threshold;
+      
+      logger.info(`[ML VALIDATION] Strategy: ${strategy.name}`);
+      logger.info(`[ML VALIDATION] Confidence: ${result.confidence}%`);
+      logger.info(`[ML VALIDATION] Threshold: ${threshold}%`);
+      logger.info(`[ML VALIDATION] Decision: ${allowed ? 'ALLOW ✅' : 'BLOCK ❌'}`);
+      
+      return {
+        allowed,
+        confidence: result.confidence,
+        threshold,
+        reasons: result.reasons || [],
+        market_context: result.market_context || {},
+        feature_scores: result.feature_scores || {},
+        error: false
+      };
+      
+    } catch (error) {
+      logger.error(`[ML VALIDATION] Error calling Arthur ML service: ${error.message}`);
+      
+      // Fail open: allow trade if ML validation fails
+      return {
+        allowed: true,
+        confidence: null,
+        reasons: ['ML validation error - trade allowed by default'],
+        error: true
+      };
+    }
+  }
+
+  /**
+   * Log ML validation attempt to Supabase
+   * @param {string} strategyId - Strategy ID
+   * @param {string} userId - User ID
+   * @param {Object} alertData - Webhook alert data
+   * @param {Object} validationResult - ML validation result
+   */
+  async logValidationAttempt(strategyId, userId, alertData, validationResult) {
+    const { supabase } = require('./supabaseClient');
+    
+    if (!supabase) {
+      logger.warn('[ML VALIDATION] Supabase client not available, skipping log');
+      return;
+    }
+    
+    try {
+      const { error } = await supabase
+        .from('strategy_validation_log')
+        .insert({
+          strategy_id: strategyId,
+          user_id: userId,
+          signal_timestamp: new Date().toISOString(),
+          symbol: alertData.symbol,
+          action: alertData.action,
+          price_at_signal: validationResult.market_context?.current_price,
+          ml_confidence: validationResult.confidence,
+          confidence_threshold: validationResult.threshold,
+          validation_result: validationResult.allowed ? 'allowed' : 'blocked',
+          market_context: validationResult.market_context,
+          feature_scores: validationResult.feature_scores,
+          decision_reasons: validationResult.reasons,
+          trade_executed: validationResult.allowed,
+        });
+      
+      if (error) {
+        logger.error(`[ML VALIDATION] Log error: ${error.message}`);
+      }
+    } catch (error) {
+      logger.error(`[ML VALIDATION] Exception logging validation: ${error.message}`);
+      // Don't fail the trade if logging fails
+    }
   }
 
   /**
@@ -91,6 +246,73 @@ class TradeExecutor {
         logger.info(`📊 Executing SignalStudio pre-built order for strategy: ${strategy} (validation skipped - trusted source)`);
       }
 
+      // ML Pre-Trade Validation (for manual strategies with ML enabled)
+      if (alertData.strategy_id && alertData.userId && isSignalStudioOrder) {
+        const { supabase } = require('./supabaseClient');
+        
+        // Load strategy details to check if ML validation is enabled
+        if (supabase) {
+          try {
+            const { data: strategyData, error: strategyError } = await supabase
+              .from('strategies')
+              .select('*')
+              .eq('id', alertData.strategy_id)
+              .eq('user_id', alertData.userId)
+              .maybeSingle();
+            
+            if (!strategyError && strategyData && strategyData.ml_assistance_enabled) {
+              logger.info(`[ML VALIDATION] Strategy "${strategyData.name}" has ML validation enabled`);
+              
+              // Get current market context
+              const marketContext = await this.getMarketContext(alertData.symbol, this.exchange);
+              
+              // Validate with ML
+              const validationResult = await this.validateWithML(strategyData, alertData, marketContext);
+              
+              // Log validation attempt
+              await this.logValidationAttempt(strategyData.id, alertData.userId, alertData, validationResult);
+              
+              // Check if trade should be blocked
+              if (!validationResult.allowed && !validationResult.error) {
+                logger.warn(`[ML BLOCK] Trade blocked by ML validation`);
+                logger.warn(`[ML BLOCK] Confidence: ${validationResult.confidence}% < ${validationResult.threshold}%`);
+                logger.warn(`[ML BLOCK] Reasons: ${validationResult.reasons.join(', ')}`);
+                
+                // Send notification to user
+                await notifyTradeBlocked(alertData.userId, {
+                  strategy_name: strategyData.name,
+                  symbol: alertData.symbol,
+                  action: alertData.action,
+                  confidence: validationResult.confidence,
+                  threshold: validationResult.threshold,
+                  reasons: validationResult.reasons
+                });
+                
+                return {
+                  success: false,
+                  blocked_by_ml: true,
+                  confidence: validationResult.confidence,
+                  threshold: validationResult.threshold,
+                  reasons: validationResult.reasons,
+                  message: `Trade blocked by ML validation (confidence ${validationResult.confidence}% < ${validationResult.threshold}%)`
+                };
+              }
+              
+              // Trade allowed (or ML error - fail open)
+              if (validationResult.error) {
+                logger.warn(`[ML VALIDATION] ML service error, allowing trade by default (fail-open)`);
+              } else {
+                logger.info(`[ML ALLOW] Trade allowed by ML validation (confidence ${validationResult.confidence}% >= ${validationResult.threshold}%) ✅`);
+              }
+            }
+          } catch (mlError) {
+            logger.error(`[ML VALIDATION] Exception during validation: ${mlError.message}`);
+            logger.warn(`[ML VALIDATION] Allowing trade by default (fail-open)`);
+            // Continue with trade execution
+          }
+        }
+      }
+
       // Route to appropriate handler
       if (action.toLowerCase() === 'close') {
         // PHASE 2: Pass sell_percentage for partial closes
@@ -118,13 +340,21 @@ class TradeExecutor {
       price,
       stopLoss,
       stop_loss_percent,
+      stop_loss_limit_price,
       takeProfit,
       take_profit_percent,
       trailingStop,
       trailing_stop_pips,
+      trailing_stop_percent,
       useTrailingStop,
       position_size_usd,
       positionSizeUsd,
+      useBracketOrder,
+      useOCOOrder,
+      useOTOOrder,
+      extended_hours,
+      extendedHours,
+      useFractional,
     } = alertData;
 
     const side = action.toUpperCase();
@@ -132,9 +362,16 @@ class TradeExecutor {
     // Support both camelCase and snake_case
     const finalOrderType = (orderType || order_type || 'market').toLowerCase();
     const finalStopLoss = stopLoss || stop_loss_percent;
+    const finalStopLossLimitPrice = stop_loss_limit_price || null;
     const finalTakeProfit = takeProfit || take_profit_percent;
     const finalTrailingStop = trailingStop || trailing_stop_pips;
+    const finalTrailingStopPercent = trailing_stop_percent || null;
     const finalUseTrailingStop = useTrailingStop || false;
+    const finalUseBracketOrder = useBracketOrder || false;
+    const finalUseOCOOrder = useOCOOrder || false;
+    const finalUseOTOOrder = useOTOOrder || false;
+    const finalExtendedHours = extended_hours || extendedHours || false;
+    const finalUseFractional = useFractional !== undefined ? useFractional : false;
 
     logger.info(`Opening ${side} position for ${symbol}`);
 
@@ -217,13 +454,108 @@ class TradeExecutor {
 
       logger.info(`Position size calculated: ${roundedQuantity} at ${entryPrice} ($${finalTradeAmount} position)`);
 
+      // Check if we should use fractional orders (Alpaca only, for small positions or when explicitly requested)
+      const isAlpaca = this.api.exchangeName === 'alpaca';
+      const shouldUseFractional = isAlpaca && (finalUseFractional || finalTradeAmount < 100); // Use fractional for < $100 or if explicitly requested
+
       // Step 5: Place entry order (exchange will use its max leverage setting)
       let orderResult;
+      let stopLossOrderId = null;
+      let takeProfitOrderId = null;
+      let stopLossType = 'REGULAR';
       
-      if (finalOrderType === 'market') {
-        orderResult = await this.api.placeMarketOrder(symbol, side, roundedQuantity);
+      // Check if we should use bracket order (Alpaca only, when both TP and SL are provided)
+      if (isAlpaca && finalUseBracketOrder && finalStopLoss && finalTakeProfit) {
+        const stopPrice = calculateStopLoss(side, entryPrice, finalStopLoss);
+        const tpPrice = calculateTakeProfit(side, entryPrice, finalTakeProfit);
+        const roundedStopPrice = roundPrice(stopPrice);
+        const roundedTpPrice = roundPrice(tpPrice);
+        
+        logger.info('Using Alpaca bracket order (entry + TP + SL in one order)');
+        
+        // Bracket orders can use either qty or notional
+        // Note: Bracket orders don't support notional directly, so we calculate qty from notional if needed
+        const bracketQty = shouldUseFractional ? (finalTradeAmount / entryPrice).toFixed(9) : roundedQuantity;
+        const bracketResult = await this.api.placeBracketOrder(
+          symbol,
+          side,
+          bracketQty,
+          roundedTpPrice,
+          roundedStopPrice,
+          finalStopLossLimitPrice ? roundPrice(calculateStopLoss(side, entryPrice, finalStopLoss) - (finalStopLossLimitPrice || 0)) : null
+        );
+        orderResult = bracketResult;
+        
+        orderResult = bracketResult;
+        // Bracket orders handle TP/SL internally, so we mark them as placed
+        stopLossOrderId = 'bracket_sl';
+        takeProfitOrderId = 'bracket_tp';
+        
+        logger.info('Bracket order placed successfully', {
+          orderId: orderResult.orderId,
+          takeProfit: roundedTpPrice,
+          stopLoss: roundedStopPrice,
+        });
+      } else if (isAlpaca && finalUseOTOOrder && (finalStopLoss || finalTakeProfit)) {
+        // Use OTO order (entry + either TP or SL)
+        const entryLimitPrice = finalOrderType === 'limit' ? entryPrice : null;
+        const tpPrice = finalTakeProfit ? calculateTakeProfit(side, entryPrice, finalTakeProfit) : null;
+        const stopPrice = finalStopLoss ? calculateStopLoss(side, entryPrice, finalStopLoss) : null;
+        
+        logger.info('Using Alpaca OTO order (entry + conditional exit)');
+        
+        // OTO orders require quantity, not notional
+        const otoQty = shouldUseFractional ? (finalTradeAmount / entryPrice).toFixed(9) : roundedQuantity;
+        const otoResult = await this.api.placeOTOOrder(
+          symbol,
+          side,
+          otoQty,
+          finalOrderType,
+          entryLimitPrice ? roundPrice(entryLimitPrice) : null,
+          tpPrice ? roundPrice(tpPrice) : null,
+          stopPrice ? roundPrice(stopPrice) : null,
+          finalStopLossLimitPrice ? roundPrice(calculateStopLoss(side, entryPrice, finalStopLoss) - (finalStopLossLimitPrice || 0)) : null
+        );
+        
+        orderResult = otoResult;
+        if (finalTakeProfit) takeProfitOrderId = 'oto_tp';
+        if (finalStopLoss) stopLossOrderId = 'oto_sl';
+        
+        logger.info('OTO order placed successfully', { orderId: orderResult.orderId });
       } else {
-        orderResult = await this.api.placeLimitOrder(symbol, side, roundedQuantity, entryPrice);
+        // Standard order placement (market or limit)
+        if (shouldUseFractional && isAlpaca) {
+          // Use fractional order for Alpaca
+          logger.info(`Using fractional order for $${finalTradeAmount}`);
+          const entryLimitPrice = finalOrderType === 'limit' ? entryPrice : null;
+          orderResult = await this.api.placeFractionalOrder(
+            symbol,
+            side,
+            finalTradeAmount,
+            finalOrderType,
+            entryLimitPrice ? roundPrice(entryLimitPrice) : null,
+            finalExtendedHours
+          );
+        } else if (isAlpaca && finalExtendedHours) {
+          // Use extended hours order
+          logger.info('Using extended hours order');
+          orderResult = await this.api.placeOrderWithExtendedHours(
+            symbol,
+            side,
+            finalOrderType,
+            roundedQuantity,
+            null,
+            finalOrderType === 'limit' ? roundPrice(entryPrice) : null,
+            true
+          );
+        } else {
+          // Standard order
+          if (finalOrderType === 'market') {
+            orderResult = await this.api.placeMarketOrder(symbol, side, roundedQuantity);
+          } else {
+            orderResult = await this.api.placeLimitOrder(symbol, side, roundedQuantity, entryPrice);
+          }
+        }
       }
 
       logger.logTrade('opened', symbol, {
@@ -233,93 +565,167 @@ class TradeExecutor {
         price: entryPrice,
       });
 
-      // Step 6: Place stop loss (regular or trailing)
-      let stopLossOrderId = null;
-      let stopLossType = 'REGULAR';
-      
-      if (finalStopLoss || finalTrailingStop) {
-        try {
-          // Check if this is Oanda and we want trailing stop
-          const isOanda = this.api.exchangeName === 'oanda';
-          const useTrailing = isOanda && (finalUseTrailingStop || finalTrailingStop);
-          
-          if (useTrailing && finalTrailingStop) {
-            // Place trailing stop for Oanda
-            const trailingDistance = parseFloat(finalTrailingStop);
-            
-            const stopLossResult = await this.api.placeTrailingStopLoss(
-              symbol,
-              side,
-              roundedQuantity,
-              trailingDistance
-            );
-
-            stopLossOrderId = stopLossResult.orderId;
-            stopLossType = 'TRAILING';
-            
-            logger.info(`Trailing stop loss placed with ${trailingDistance} pips distance`, {
-              orderId: stopLossOrderId,
-              distance: trailingDistance,
-              type: 'TRAILING',
-            });
-          } else {
-            // Place regular stop loss
-            const stopPrice = calculateStopLoss(side, entryPrice, finalStopLoss);
-            const roundedStopPrice = roundPrice(stopPrice);
-            const stopSide = getOppositeSide(side);
-
-            const stopLossResult = await this.api.placeStopLoss(
-              symbol,
-              stopSide,
-              roundedQuantity,
-              roundedStopPrice
-            );
-
-            stopLossOrderId = stopLossResult.orderId;
-            
-            const dollarLoss = (finalTradeAmount * finalStopLoss / 100).toFixed(2);
-            
-            logger.info(`Stop loss placed at ${roundedStopPrice}`, {
-              orderId: stopLossOrderId,
-              percent: finalStopLoss,
-              dollarAmount: `$${dollarLoss}`,
-              type: 'REGULAR',
-            });
-          }
-        } catch (error) {
-          logger.logError('Failed to place stop loss', error, { symbol });
-          // Don't fail the entire trade if stop loss fails, but log it prominently
-        }
-      }
-
-      // Step 7: Place take profit (optional)
-      let takeProfitOrderId = null;
-      
-      if (finalTakeProfit) {
-        try {
+      // Step 6: Place stop loss and take profit (skip if already handled by bracket/OTO order)
+      if (!stopLossOrderId && !takeProfitOrderId) {
+        // Check if we should use OCO order (Alpaca only, for exit orders when position already exists)
+        if (isAlpaca && finalUseOCOOrder && finalStopLoss && finalTakeProfit) {
+          const stopPrice = calculateStopLoss(side, entryPrice, finalStopLoss);
           const tpPrice = calculateTakeProfit(side, entryPrice, finalTakeProfit);
+          const roundedStopPrice = roundPrice(stopPrice);
           const roundedTpPrice = roundPrice(tpPrice);
-          const tpSide = getOppositeSide(side);
-
-          const takeProfitResult = await this.api.placeTakeProfit(
+          const exitSide = getOppositeSide(side);
+          
+          logger.info('Using Alpaca OCO order (TP or SL, not both)');
+          
+          const ocoResult = await this.api.placeOCOOrder(
             symbol,
-            tpSide,
+            exitSide,
             roundedQuantity,
-            roundedTpPrice
+            roundedTpPrice,
+            roundedStopPrice,
+            finalStopLossLimitPrice ? roundPrice(calculateStopLoss(side, entryPrice, finalStopLoss) - (finalStopLossLimitPrice || 0)) : null
           );
+          
+          stopLossOrderId = 'oco_sl';
+          takeProfitOrderId = 'oco_tp';
+          
+          logger.info('OCO order placed successfully', { orderId: ocoResult.orderId });
+        } else {
+          // Standard TP/SL placement
+          
+          // Step 6a: Place stop loss (regular, trailing, or stop-limit)
+          if (finalStopLoss || finalTrailingStop) {
+            try {
+              // Check if we want trailing stop (OANDA or Alpaca)
+              const isOanda = this.api.exchangeName === 'oanda';
+              const useTrailing = (isOanda || isAlpaca) && (finalUseTrailingStop || finalTrailingStop || finalTrailingStopPercent);
+              
+              if (useTrailing && (finalTrailingStop || finalTrailingStopPercent)) {
+                // Place trailing stop (OANDA uses pips, Alpaca uses $ or %)
+                if (isOanda && finalTrailingStop) {
+                  // OANDA trailing stop (pips)
+                  const trailingDistance = parseFloat(finalTrailingStop);
+                  
+                  const stopLossResult = await this.api.placeTrailingStopLoss(
+                    symbol,
+                    side,
+                    roundedQuantity,
+                    trailingDistance
+                  );
 
-          takeProfitOrderId = takeProfitResult.orderId;
-          
-          const dollarProfit = (finalTradeAmount * finalTakeProfit / 100).toFixed(2);
-          
-          logger.info(`Take profit placed at ${roundedTpPrice}`, {
-            orderId: takeProfitOrderId,
-            percent: finalTakeProfit,
-            dollarAmount: `$${dollarProfit}`,
-          });
-        } catch (error) {
-          logger.logError('Failed to place take profit', error, { symbol });
-          // Don't fail the entire trade if TP fails
+                  stopLossOrderId = stopLossResult.orderId;
+                  stopLossType = 'TRAILING';
+                  
+                  logger.info(`Trailing stop loss placed with ${trailingDistance} pips distance`, {
+                    orderId: stopLossOrderId,
+                    distance: trailingDistance,
+                    type: 'TRAILING',
+                  });
+                } else if (isAlpaca && (finalTrailingStop || finalTrailingStopPercent)) {
+                  // Alpaca trailing stop ($ or %)
+                  const trailPrice = finalTrailingStop ? parseFloat(finalTrailingStop) : null;
+                  const trailPercent = finalTrailingStopPercent ? parseFloat(finalTrailingStopPercent) : null;
+                  
+                  const stopLossResult = await this.api.placeTrailingStopLoss(
+                    symbol,
+                    getOppositeSide(side),
+                    roundedQuantity,
+                    trailPrice,
+                    trailPercent,
+                    'day' // Alpaca trailing stops use 'day' or 'gtc'
+                  );
+
+                  stopLossOrderId = stopLossResult.orderId;
+                  stopLossType = 'TRAILING';
+                  
+                  logger.info(`Alpaca trailing stop placed`, {
+                    orderId: stopLossOrderId,
+                    trailPrice,
+                    trailPercent,
+                    type: 'TRAILING',
+                  });
+                }
+              } else if (finalStopLoss) {
+                // Place regular stop loss or stop-limit
+                const stopPrice = calculateStopLoss(side, entryPrice, finalStopLoss);
+                const roundedStopPrice = roundPrice(stopPrice);
+                const stopSide = getOppositeSide(side);
+                
+                // Calculate stop-limit price if provided (Alpaca only)
+                let stopLimitPrice = null;
+                if (isAlpaca && finalStopLossLimitPrice) {
+                  // stop_loss_limit_price is the offset from stop price
+                  stopLimitPrice = roundPrice(stopPrice - (finalStopLossLimitPrice || 0));
+                }
+
+                // Call placeStopLoss - only pass limitPrice for Alpaca (5th parameter)
+                let stopLossResult;
+                if (isAlpaca && stopLimitPrice) {
+                  // Alpaca supports stop-limit orders (5th parameter)
+                  stopLossResult = await this.api.placeStopLoss(
+                    symbol,
+                    stopSide,
+                    roundedQuantity,
+                    roundedStopPrice,
+                    stopLimitPrice
+                  );
+                } else {
+                  // Standard stop loss for all other exchanges (4 parameters)
+                  stopLossResult = await this.api.placeStopLoss(
+                    symbol,
+                    stopSide,
+                    roundedQuantity,
+                    roundedStopPrice
+                  );
+                }
+
+                stopLossOrderId = stopLossResult.orderId;
+                stopLossType = stopLimitPrice ? 'STOP_LIMIT' : 'REGULAR';
+                
+                const dollarLoss = (finalTradeAmount * finalStopLoss / 100).toFixed(2);
+                
+                logger.info(`Stop loss placed at ${roundedStopPrice}`, {
+                  orderId: stopLossOrderId,
+                  percent: finalStopLoss,
+                  dollarAmount: `$${dollarLoss}`,
+                  type: stopLossType,
+                  limitPrice: stopLimitPrice,
+                });
+              }
+            } catch (error) {
+              logger.logError('Failed to place stop loss', error, { symbol });
+              // Don't fail the entire trade if stop loss fails, but log it prominently
+            }
+          }
+
+          // Step 6b: Place take profit (optional)
+          if (finalTakeProfit) {
+            try {
+              const tpPrice = calculateTakeProfit(side, entryPrice, finalTakeProfit);
+              const roundedTpPrice = roundPrice(tpPrice);
+              const tpSide = getOppositeSide(side);
+
+              const takeProfitResult = await this.api.placeTakeProfit(
+                symbol,
+                tpSide,
+                roundedQuantity,
+                roundedTpPrice
+              );
+
+              takeProfitOrderId = takeProfitResult.orderId;
+              
+              const dollarProfit = (finalTradeAmount * finalTakeProfit / 100).toFixed(2);
+              
+              logger.info(`Take profit placed at ${roundedTpPrice}`, {
+                orderId: takeProfitOrderId,
+                percent: finalTakeProfit,
+                dollarAmount: `$${dollarProfit}`,
+              });
+            } catch (error) {
+              logger.logError('Failed to place take profit', error, { symbol });
+              // Don't fail the entire trade if TP fails
+            }
+          }
         }
       }
 
@@ -334,7 +740,11 @@ class TradeExecutor {
         stopLossPercent: finalStopLoss,
         takeProfitPercent: finalTakeProfit,
         stopLossType: stopLossType,
-        trailingStopDistance: finalTrailingStop,
+        trailingStopDistance: finalTrailingStop || finalTrailingStopPercent,
+        trailingStopPercent: finalTrailingStopPercent,
+        stopLossLimitPrice: finalStopLossLimitPrice,
+        extendedHours: finalExtendedHours,
+        useFractional: shouldUseFractional,
         exchange: this.api.exchangeName,
       }, this.exchange);
 
@@ -448,19 +858,38 @@ class TradeExecutor {
       const fullQuantity = Math.abs(positionAmt);
       
       // PHASE 2: Calculate quantity based on sell percentage
-      const sellPct = parseFloat(sellPercentage) || 100;
+      let sellPct = parseFloat(sellPercentage) || 100;
+      
+      // Validate sell percentage (must be between 0.1 and 100)
+      if (sellPct < 0.1 || sellPct > 100) {
+        logger.warn(`Invalid sell_percentage: ${sellPct}%. Using 100% (full close).`);
+        sellPct = 100;
+      }
+      
       let quantity = fullQuantity;
+      let isPartialClose = false;
       
       if (sellPct < 100 && sellPct > 0) {
         // Partial close: calculate quantity to close
         quantity = Math.floor((fullQuantity * sellPct) / 100);
+        
+        // Ensure at least 1 unit is closed
         if (quantity === 0) {
-          quantity = 1; // At least close 1 unit
+          quantity = 1;
+          logger.warn(`Calculated 0 quantity for ${sellPct}% of ${fullQuantity}. Using minimum of 1 unit.`);
         }
-        logger.info(`Partial close: Closing ${quantity} of ${fullQuantity} (${sellPct}%) for ${symbol}`);
+        
+        isPartialClose = true;
+        logger.info(`📉 Partial close: Closing ${quantity} of ${fullQuantity} units (${sellPct}%) for ${symbol}`, {
+          fullQuantity,
+          closeQuantity: quantity,
+          percentage: sellPct,
+          remainingQuantity: fullQuantity - quantity
+        });
       } else {
         // Full close (default behavior)
         quantity = fullQuantity;
+        logger.info(`Closing full position: ${quantity} units for ${symbol}`);
       }
       
       const side = positionAmt > 0 ? 'SELL' : 'BUY'; // Opposite side to close
@@ -560,36 +989,6 @@ class TradeExecutor {
           strategyId: strategyId,
         });
 
-        // =====================================================================
-        // COPY TRADING: Update copied trade P&L if this was a copied trade
-        // =====================================================================
-        // If this trade was executed as part of copy trading, update the
-        // copied_trades table with P&L for billing purposes.
-        // =====================================================================
-        if (alertData && alertData.source === 'copy_trading' && tradeResult && tradeResult.data) {
-          const { updateCopiedTradePnl, updateCopiedTradeFollowerId } = require('./utils/copyTrading');
-          const tradeId = tradeResult.data[0]?.id || null;
-          if (tradeId) {
-            // Update follower_trade_id in copied_trades
-            if (alertData.copy_relationship_id) {
-              updateCopiedTradeFollowerId(alertData.copy_relationship_id, tradeId).catch(err => {
-                logger.debug('Failed to update copied trade follower_trade_id', err);
-              });
-            }
-            
-            // Update P&L
-            updateCopiedTradePnl(tradeId, {
-              pnl_usd: pnlUsd,
-              pnl_percent: pnlPercent,
-              is_winner: pnlUsd > 0,
-              exit_time: new Date().toISOString(),
-              strategyId: strategyId
-            }).catch(err => {
-              logger.debug('Failed to update copied trade P&L', err);
-            });
-          }
-        }
-
         // Update strategy performance metrics
         if (strategy) {
           await this.strategyManager.updateStrategyMetrics(strategy, {
@@ -606,17 +1005,26 @@ class TradeExecutor {
         // Full close: remove position from database and tracker
         await removePosition(symbol, userId);
         this.tracker.removePosition(symbol, this.exchange);
-        logger.info(`Position fully closed and removed for ${symbol}`);
+        logger.info(`✅ Position fully closed and removed for ${symbol}`, {
+          quantity,
+          pnl: `$${pnlUsd.toFixed(2)}`
+        });
       } else {
         // Partial close: update position quantity in tracker (don't remove)
         // The position tracker and database will be updated with remaining quantity
         // Note: This assumes the exchange API properly handles partial closes
         // If your exchange updates position automatically, this may not be needed
-        logger.info(`Partial close completed: ${fullQuantity - quantity} remaining for ${symbol}`);
+        const remainingQty = fullQuantity - quantity;
+        logger.info(`✅ Partial close completed for ${symbol}`, {
+          closedQuantity: quantity,
+          remainingQuantity: remainingQty,
+          percentage: `${sellPct}%`,
+          pnl: `$${pnlUsd.toFixed(2)}`
+        });
         // Position will still be tracked with reduced quantity after exchange processes the close
       }
 
-      logger.info(`Position closed successfully for ${symbol} with P&L: $${pnlUsd.toFixed(2)}`);
+      logger.info(`Position close successful for ${symbol}: ${isPartialClose ? 'Partial' : 'Full'} close with P&L: $${pnlUsd.toFixed(2)}`);
 
       // Send notification based on P&L (async, fire-and-forget)
       if (userId) {
