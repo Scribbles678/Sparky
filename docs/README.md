@@ -100,9 +100,10 @@ Developer documentation:
 ### AI & Machine Learning
 
 - [AI Worker Guide](guides/AI_WORKER.md) - AI Signal Engine
+- [ML Pre-Trade Validation](../ML_VALIDATION_INTEGRATION.md) - ML validation for manual strategies
 - [AI Studio Config Integration](development/AI_STUDIO_CONFIG_INTEGRATION.md) - Config system
-- [Arthur ML Integration](development/ARTHUR_ML_INTEGRATION.md) - ML service
-- [Auto-Retrain System](development/AUTO_RETRAIN_SYSTEM.md) - Self-improvement
+- [Arthur ML Integration](development/ARTHUR_ML_INTEGRATION.md) - ML service for AI strategies
+- [Auto-Retrain System](development/AUTO_RETRAIN_SYSTEM.md) - Self-improvement system
 
 ### Risk Management
 
@@ -123,6 +124,7 @@ Developer documentation:
 ```
 docs/
 ├── README.md (this file)
+├── ML_VALIDATION_INTEGRATION.md (ML pre-trade validation)
 │
 ├── guides/
 │   ├── AI_WORKER.md
@@ -170,6 +172,7 @@ docs/
 - **Understand the API** → [API Reference](reference/API_REFERENCE.md)
 - **Integrate with SignalStudio** → [Order Builder Integration](guides/ORDER_BUILDER_INTEGRATION.md)
 - **Set up ML predictions** → [Arthur ML Integration](development/ARTHUR_ML_INTEGRATION.md)
+- **Enable ML validation on strategies** → [ML Validation Integration](../ML_VALIDATION_INTEGRATION.md)
 - **Troubleshoot issues** → [Troubleshooting Guide](troubleshooting/COMMON_ISSUES.md)
 - **Understand architecture** → [Project Structure](reference/PROJECT_STRUCTURE.md)
 

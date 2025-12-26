@@ -2,6 +2,8 @@
 
 **How Sparky AI Worker integrates with Arthur ML Service for hybrid ML + LLM predictions**
 
+> **Note:** This document describes ML integration for **AI strategies** (AI Worker). For **ML pre-trade validation** on manual strategies, see [ML Validation Integration](../../ML_VALIDATION_INTEGRATION.md).
+
 ---
 
 ## Overview

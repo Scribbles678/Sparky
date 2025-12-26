@@ -96,10 +96,34 @@ Main webhook endpoint for receiving trading alerts from TradingView or SignalStu
 - `429` - Too Many Requests (webhook limit or risk limit exceeded)
 - `500` - Internal Server Error
 
+**Special Response Codes:**
+- `200` with `success: false` and `blocked_by_ml: true` - Trade blocked by ML validation (not an error, but trade was prevented)
+
+**ML Validation (Optional):**
+If the webhook includes a `strategy_id` and the strategy has `ml_assistance_enabled = true`, the trade will be validated by Arthur ML service before execution:
+
+- ML validation checks signal confidence against configured threshold
+- Trades with confidence below threshold are blocked
+- Blocked trades return a special response (see below)
+- ML service errors result in fail-open behavior (trade proceeds)
+
+**Response (ML Blocked):**
+```json
+{
+  "success": false,
+  "blocked_by_ml": true,
+  "confidence": 45,
+  "threshold": 70,
+  "reasons": ["low_volume", "weak_support"],
+  "message": "Trade blocked by ML validation (confidence 45% < 70%)"
+}
+```
+
 **Notes:**
 - Webhook secret is validated per-user from Supabase (cached)
 - Subscription limits are checked (monthly webhook quotas)
 - Risk limits are checked (weekly trade/loss limits)
+- ML validation is checked (if enabled on strategy)
 - User credentials are loaded dynamically from Supabase
 
 ---

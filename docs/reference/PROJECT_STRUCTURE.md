@@ -130,6 +130,14 @@ Sparky /webhook
     ↓
 [Load User's Exchange Credentials]
     ↓
+[ML Pre-Trade Validation] (if strategy has ml_assistance_enabled)
+    ├─→ [Load Strategy from DB]
+    ├─→ [Get Market Context]
+    ├─→ [Call Arthur ML Service]
+    ├─→ [Check Confidence vs Threshold]
+    ├─→ [If blocked] → Return blocked response + notification
+    └─→ [If allowed or error] → Continue (fail-open)
+    ↓
 [Check Existing Position]
     ├─→ [If exists] → Close Position → Wait 1s
     └─→ [If not] → Continue
@@ -210,10 +218,15 @@ Close Signal Received
   - `executeWebhook()` - Main entry point
   - `openPosition()` - Full position opening flow
   - `closePosition()` - Close existing position
+  - `validateWithML()` - ML pre-trade validation
+  - `getMarketContext()` - Fetch market data for ML
+  - `logValidationAttempt()` - Log ML validation results
 - **Features**: 
   - Multi-tenant (uses user_id for all DB operations)
+  - ML pre-trade validation (optional, per-strategy)
   - Sends notifications on trade events
   - Logs to Supabase positions/trades tables
+  - Fail-open error handling (trades proceed if ML fails)
 
 ### `src/supabaseClient.js` (Database Client)
 - **Purpose**: All Supabase database operations
@@ -258,6 +271,20 @@ Close Signal Received
   - Redis caching for performance
   - Graceful degradation on errors
   - Automatic cache invalidation
+
+### ML Validation System
+- **Purpose**: Pre-trade validation using Arthur ML service
+- **Integration**: `src/tradeExecutor.js`
+- **Flow**:
+  1. Check if strategy has `ml_assistance_enabled = true`
+  2. Fetch current market context (price, volume)
+  3. Call Arthur ML service `/validate-strategy-signal`
+  4. Compare confidence score to threshold
+  5. Block trade if confidence < threshold
+  6. Log validation attempt to `strategy_validation_log` table
+  7. Send notification if blocked
+- **Error Handling**: Fail-open (allows trades if ML service unavailable)
+- **Configuration**: Per-strategy via `ml_config.confidence_threshold` (default: 70%)
 
 ### `src/utils/webhookLimits.js` (Subscription Limits)
 - **Purpose**: Enforce monthly webhook limits by subscription plan

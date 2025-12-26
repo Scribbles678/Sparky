@@ -56,6 +56,7 @@ pm2 start ecosystem.config.js
 
 - 🔔 **Multi-Exchange Trading** - Aster, OANDA, Tradier, 100+ via CCXT
 - 🤖 **AI Signal Engine** - Institutional-grade ML with ensemble models
+- 🧠 **ML Pre-Trade Validation** - Validate manual strategy signals with ML before execution
 - 🛡️ **Risk Management** - Weekly trade/loss limits
 - 📊 **Subscription Limits** - Monthly webhook quotas
 - 🔐 **Multi-Tenant Architecture** - Per-user credentials
@@ -73,6 +74,7 @@ pm2 start ecosystem.config.js
 - **[Deployment Guide](docs/guides/DEPLOYMENT.md)** - VPS setup and production deployment
 - **[TradingView Setup](docs/guides/TRADINGVIEW.md)** - Webhook configuration
 - **[AI Worker Guide](docs/guides/AI_WORKER.md)** - AI Signal Engine with ML integration
+- **[ML Validation Integration](docs/ML_VALIDATION_INTEGRATION.md)** - ML pre-trade validation for manual strategies
 - **[Multi-Tenant Guide](docs/guides/MULTI_TENANT.md)** - Multi-user setup
 
 ### Reference Documentation
