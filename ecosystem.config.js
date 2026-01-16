@@ -1,7 +1,7 @@
 module.exports = {
   apps: [
     {
-      name: 'aster-bot',
+      name: 'sparky',
       script: './src/index.js',
       instances: 1,
       autorestart: true,
