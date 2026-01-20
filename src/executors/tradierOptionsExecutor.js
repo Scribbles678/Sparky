@@ -43,6 +43,8 @@ class TradierOptionsExecutor {
     const desiredStrike = alertData.strike ? parseFloat(alertData.strike) : null;
     const desiredExpiration = alertData.expiration || null;
     const sizePercent = alertData.sizePercent || alertData.size || settings.position_size_percent || 0;
+    const exitStrategy = alertData.exitStrategy || 'fixed_tp_sl';
+    const positionSizeUsd = alertData.positionSizeUsd || null;
 
     if (!symbol) {
       throw new Error('Underlying symbol is required for Tradier options orders');
@@ -68,48 +70,83 @@ class TradierOptionsExecutor {
     const contractSize = parseInt(optionQuote.contract_size, 10) || 100;
 
     const buyingPower = await this.api.getAvailableMargin();
-    const positionUsd = Math.max(0, buyingPower * (sizePercent / 100));
+    let positionUsd;
+    if (positionSizeUsd && positionSizeUsd > 0) {
+      positionUsd = positionSizeUsd;
+    } else {
+      positionUsd = Math.max(0, buyingPower * (sizePercent / 100));
+    }
     const contractCost = optionAsk * contractSize;
     const quantityContracts = Math.floor(positionUsd / contractCost) || 1;
 
     const entryLimitPrice = this.roundPrice(
       optionAsk * (1 + (settings.entry_limit_offset_percent || settings.entryLimitOffsetPercent || 1) / 100)
     );
-    const tpPrice = this.roundPrice(
-      entryLimitPrice * (1 + (settings.tp_percent || settings.takeProfit || 5) / 100)
-    );
-    const slStop = this.roundPrice(
-      optionBid * (1 - (settings.sl_percent || settings.stopLoss || 8) / 100)
-    );
 
-    const legs = [
-      {
+    // Time-based exit strategies don't use OTOCO orders
+    const isTimeBasedExit = ['time_1h', 'time_2h', 'eod'].includes(exitStrategy);
+    
+    let order;
+    let tpPrice = null;
+    let slStop = null;
+
+    if (isTimeBasedExit) {
+      // For time-based exits, just place a simple limit buy order
+      // The monitor will handle closing at the scheduled time
+      order = await this.api.createOptionMarketOrder({
         underlyingSymbol: symbol,
         optionSymbol,
         quantity: quantityContracts,
         side: 'buy_to_open',
-        type: 'limit',
-        price: entryLimitPrice,
-      },
-      {
-        underlyingSymbol: symbol,
-        optionSymbol,
-        quantity: quantityContracts,
-        side: 'sell_to_close',
-        type: 'limit',
-        price: tpPrice,
-      },
-      {
-        underlyingSymbol: symbol,
-        optionSymbol,
-        quantity: quantityContracts,
-        side: 'sell_to_close',
-        type: 'stop',
-        stop: slStop,
-      },
-    ];
+        duration: 'day',
+        tag: alertData.strategy || 'opening_range',
+      });
+      logger.info('Tradier options market order placed (time-based exit)', { optionSymbol, exitStrategy });
+    } else {
+      // Standard OTOCO with TP and SL
+      tpPrice = this.roundPrice(
+        entryLimitPrice * (1 + (settings.tp_percent || settings.takeProfit || 50) / 100)
+      );
+      slStop = this.roundPrice(
+        optionBid * (1 - (settings.sl_percent || settings.stopLoss || 30) / 100)
+      );
 
-    const order = await this.api.createOtocoOrder(legs, { tag: alertData.strategy || '' });
+      const legs = [
+        {
+          underlyingSymbol: symbol,
+          optionSymbol,
+          quantity: quantityContracts,
+          side: 'buy_to_open',
+          type: 'limit',
+          price: entryLimitPrice,
+        },
+        {
+          underlyingSymbol: symbol,
+          optionSymbol,
+          quantity: quantityContracts,
+          side: 'sell_to_close',
+          type: 'limit',
+          price: tpPrice,
+        },
+        {
+          underlyingSymbol: symbol,
+          optionSymbol,
+          quantity: quantityContracts,
+          side: 'sell_to_close',
+          type: 'stop',
+          stop: slStop,
+        },
+      ];
+
+      order = await this.api.createOtocoOrder(legs, { tag: alertData.strategy || '' });
+      logger.info('Tradier options OTOCO order placed', { optionSymbol, quantityContracts });
+    }
+
+    // Calculate scheduled exit time for time-based strategies
+    let scheduledExitTime = null;
+    if (isTimeBasedExit) {
+      scheduledExitTime = this.calculateScheduledExitTime(exitStrategy);
+    }
 
     await saveOptionTrade({
       status: 'pending_entry',
@@ -132,13 +169,16 @@ class TradierOptionsExecutor {
       configSnapshot: {
         sizePercent,
         settings,
+        exitStrategy,
+        scheduledExitTime,
       },
       extraMetadata: {
         signal: alertData,
+        exitStrategy,
+        scheduledExitTime,
+        signalId: alertData.signalId || null,
       },
     });
-
-    logger.info('Tradier options OTOCO order placed', { optionSymbol, quantityContracts });
 
     return {
       success: true,
@@ -146,7 +186,43 @@ class TradierOptionsExecutor {
       optionSymbol,
       quantity: quantityContracts,
       orderId: order.id,
+      exitStrategy,
     };
+  }
+
+  calculateScheduledExitTime(exitStrategy) {
+    const now = new Date();
+    const etString = now.toLocaleString('en-US', { timeZone: 'America/New_York' });
+    const etNow = new Date(etString);
+    
+    let exitHour;
+    let exitMinute = 0;
+
+    switch (exitStrategy) {
+      case 'time_1h':
+        exitHour = 11; // 11:00 AM ET (1 hour after 10 AM entry)
+        break;
+      case 'time_2h':
+        exitHour = 12; // 12:00 PM ET (2 hours after 10 AM entry)
+        break;
+      case 'eod':
+        exitHour = 15;
+        exitMinute = 55; // 3:55 PM ET (5 min before close)
+        break;
+      default:
+        return null;
+    }
+
+    // Create exit time in ET
+    const exitTime = new Date(etNow);
+    exitTime.setHours(exitHour, exitMinute, 0, 0);
+
+    // If exit time has already passed today, it means we missed the window
+    if (exitTime <= etNow) {
+      return null;
+    }
+
+    return exitTime.toISOString();
   }
 
   async closePosition(alertData) {

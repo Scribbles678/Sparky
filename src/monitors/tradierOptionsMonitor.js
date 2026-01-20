@@ -100,6 +100,16 @@ class TradierOptionsMonitor {
     if (trade.status === 'open') {
       const settings = settingsService.getExchangeSettings(this.exchange);
 
+      // Check for time-based exit strategies (opening_range, etc.)
+      const exitStrategy = this.getExitStrategy(trade);
+      if (this.isTimeBasedExit(exitStrategy)) {
+        const shouldExit = this.shouldTimeBasedExit(trade);
+        if (shouldExit) {
+          await this.executeTimeBasedExit(trade, entryLeg, exitStrategy);
+          return;
+        }
+      }
+
       if (settings.auto_close_outside_window !== false && !this.isWithinTradingWindow(settings)) {
         await this.forceClosePosition(trade, entryLeg);
         return;
@@ -114,6 +124,105 @@ class TradierOptionsMonitor {
         await this.handleExit(trade, entryLeg, slLeg, 'STOP_LOSS', order);
         return;
       }
+    }
+  }
+
+  getExitStrategy(trade) {
+    const extraMetadata = trade.extra_metadata || {};
+    const configSnapshot = trade.config_snapshot || {};
+    return extraMetadata.exitStrategy || configSnapshot.exitStrategy || null;
+  }
+
+  isTimeBasedExit(exitStrategy) {
+    return ['time_1h', 'time_2h', 'eod'].includes(exitStrategy);
+  }
+
+  shouldTimeBasedExit(trade) {
+    const extraMetadata = trade.extra_metadata || {};
+    const configSnapshot = trade.config_snapshot || {};
+    const scheduledExitTime = extraMetadata.scheduledExitTime || configSnapshot.scheduledExitTime;
+
+    if (!scheduledExitTime) {
+      // Fallback: calculate based on exit strategy and entry time
+      return this.shouldExitByStrategy(trade);
+    }
+
+    const exitTime = new Date(scheduledExitTime);
+    const now = new Date();
+
+    return now >= exitTime;
+  }
+
+  shouldExitByStrategy(trade) {
+    const exitStrategy = this.getExitStrategy(trade);
+    if (!exitStrategy) return false;
+
+    const now = new Date();
+    const etString = now.toLocaleString('en-US', { timeZone: 'America/New_York' });
+    const etNow = new Date(etString);
+    const currentMinutes = etNow.getHours() * 60 + etNow.getMinutes();
+
+    switch (exitStrategy) {
+      case 'time_1h':
+        // Exit at 11:00 AM ET
+        return currentMinutes >= 11 * 60;
+      case 'time_2h':
+        // Exit at 12:00 PM ET
+        return currentMinutes >= 12 * 60;
+      case 'eod':
+        // Exit at 3:55 PM ET
+        return currentMinutes >= 15 * 60 + 55;
+      default:
+        return false;
+    }
+  }
+
+  async executeTimeBasedExit(trade, entryLeg, exitStrategy) {
+    try {
+      const exitReasonMap = {
+        'time_1h': 'TIME_1H',
+        'time_2h': 'TIME_2H',
+        'eod': 'EOD',
+      };
+      const exitReason = exitReasonMap[exitStrategy] || 'TIME_EXIT';
+
+      logger.info(`Executing time-based exit for ${trade.option_symbol} (${exitStrategy})`);
+
+      const quantityContracts = Number(trade.quantity_contracts) || 1;
+
+      const order = await this.api.createOptionMarketOrder({
+        underlyingSymbol: trade.underlying_symbol,
+        optionSymbol: trade.option_symbol,
+        quantity: quantityContracts,
+        side: 'sell_to_close',
+        duration: 'day',
+        tag: `${exitStrategy}_exit`,
+      });
+
+      // Wait briefly for fill
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+
+      const exitOrder = await this.api.getOrder(trade.underlying_symbol, order.id);
+      const exitLeg = this.normalizeLegs(exitOrder.leg).find((leg) =>
+        (leg.side || '').toLowerCase() === 'sell_to_close'
+      );
+
+      if (exitLeg && this.isFilled(exitLeg)) {
+        await this.handleExit(trade, entryLeg, exitLeg, exitReason, exitOrder);
+      } else {
+        logger.warn(`Time-based exit order ${order.id} did not fill immediately for ${trade.option_symbol}`);
+        // Update trade with pending exit order
+        await updateOptionTrade(trade.id, {
+          time_exit_order: exitOrder,
+          extra_metadata: {
+            ...trade.extra_metadata,
+            pendingTimeExit: true,
+            timeExitOrderId: order.id,
+          },
+        });
+      }
+    } catch (error) {
+      logger.error(`Failed to execute time-based exit for ${trade.id}`, error);
     }
   }
 
