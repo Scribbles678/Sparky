@@ -81,11 +81,29 @@ async function applySupabaseCredentials() {
       tradier_options: 'tradierOptions',
     };
 
-    credentials.forEach((entry) => {
+    // Sort credentials: process production entries LAST so they take priority
+    // (both testnet and production may exist for the same exchange key,
+    // and the last entry processed wins via overwrite)
+    const sorted = [...credentials].sort((a, b) => {
+      if (a.environment === 'production' && b.environment !== 'production') return 1;
+      if (a.environment !== 'production' && b.environment === 'production') return -1;
+      return 0;
+    });
+
+    // Only apply production credentials for the primary bot exchange.
+    // Testnet credentials are loaded on-demand via ExchangeFactory.createExchangeForUser().
+    sorted.forEach((entry) => {
       if (entry.exchange === 'webhook') {
         if (entry.webhook_secret) {
           config.webhookSecret = entry.webhook_secret;
         }
+        return;
+      }
+
+      // Skip non-production credentials for the primary exchange config
+      // (testnet is only used on-demand for specific API requests)
+      if (entry.environment && entry.environment !== 'production') {
+        logger.debug(`Skipping ${entry.exchange} ${entry.environment} credentials for primary config (label: ${entry.label || 'N/A'})`);
         return;
       }
 
@@ -119,7 +137,7 @@ async function applySupabaseCredentials() {
           config[configKey].userAddress = meta.user_address;
           config[configKey].signerAddress = meta.signer_address;
           config[configKey].privateKey = meta.private_key;
-          logger.info(`🔐 V3 wallet credentials detected for ${entry.exchange}`);
+          logger.info(`🔐 V3 wallet credentials detected for ${entry.exchange} (${entry.environment || 'production'})`);
         }
       }
     });
