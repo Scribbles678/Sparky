@@ -108,9 +108,16 @@ class AsterWebSocket extends EventEmitter {
       this.marketStreams.add(stream.toLowerCase());
     }
 
-    // If already connected, send subscribe message
+    // If already connected, send subscribe message via live subscription
     if (this.marketWs && this.marketWs.readyState === WebSocket.OPEN) {
       this._sendMarketSubscribe(streams);
+      return;
+    }
+
+    // If currently connecting, don't tear it down — just let it connect
+    // with the full stream set (streams were already added above)
+    if (this.marketWs && this.marketWs.readyState === WebSocket.CONNECTING) {
+      logger.debug(`WebSocket still connecting — ${streams.length} stream(s) queued for reconnect`);
       return;
     }
 
@@ -150,16 +157,29 @@ class AsterWebSocket extends EventEmitter {
     logger.info(`📡 Connecting to market streams (${this.marketStreams.size} streams)`);
     logger.debug(`   URL: ${url.substring(0, 120)}...`);
 
+    // Snapshot which streams are in the URL so we can detect late additions
+    const initialStreams = new Set(this.marketStreams);
+
     try {
       this.marketWs = new WebSocket(url);
       this.stats.startTime = this.stats.startTime || Date.now();
 
       this.marketWs.on('open', () => {
-        logger.info(`✅ Market WebSocket connected (${this.marketStreams.size} streams)`);
+        logger.info(`✅ Market WebSocket connected (${initialStreams.size} streams)`);
         this.marketReconnectDelay = RECONNECT_MIN_DELAY;
         this.lastMarketMessage = Date.now();
         this.emit('market:connected');
         this._startHeartbeat();
+
+        // If streams were added while we were connecting, live-subscribe them now
+        const lateStreams = [];
+        for (const s of this.marketStreams) {
+          if (!initialStreams.has(s)) lateStreams.push(s);
+        }
+        if (lateStreams.length > 0) {
+          logger.info(`📡 Late-subscribing ${lateStreams.length} stream(s) added during connect`);
+          this._sendMarketSubscribe(lateStreams);
+        }
       });
 
       this.marketWs.on('message', (data) => {
