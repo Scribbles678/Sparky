@@ -8,6 +8,8 @@
  */
 
 const AsterAPI = require('./asterApi');
+const AsterAPIV3 = require('./asterApiV3');
+const AsterWebSocket = require('./asterWebSocket');
 const OandaAPI = require('./oandaApi');
 const TradierAPI = require('./tradierApi');
 const TradierOptionsAPI = require('./tradierOptionsApi');
@@ -39,6 +41,28 @@ class ExchangeFactory {
     
     switch (name) {
       case 'aster':
+        // V3 API (EIP-712 wallet-based auth)
+        if (config.apiVersion === 'v3' || config.userAddress) {
+          if (!config.userAddress || !config.signerAddress || !config.privateKey) {
+            throw new Error('Aster DEX V3 requires userAddress, signerAddress, and privateKey');
+          }
+          const isTestnet = config.environment === 'testnet';
+          const v3Api = new AsterAPIV3({
+            userAddress: config.userAddress,
+            signerAddress: config.signerAddress,
+            privateKey: config.privateKey,
+            apiUrl: config.apiUrl || (isTestnet 
+              ? 'https://fapi.asterdex-testnet.com' 
+              : 'https://fapi.asterdex.com'),
+            wsUrl: config.wsUrl || (isTestnet
+              ? 'wss://fstream.asterdex-testnet.com'
+              : 'wss://fstream.asterdex.com'),
+            environment: config.environment || 'production',
+          });
+          logger.info(`✅ Aster V3 API created (${config.environment || 'production'}, EIP-712 auth)`);
+          return v3Api;
+        }
+        // V1/V2 API (legacy HMAC auth — backward compatible)
         if (!config.apiKey || !config.apiSecret) {
           throw new Error('Aster DEX requires apiKey and apiSecret');
         }
@@ -362,6 +386,25 @@ class ExchangeFactory {
   }
 
   /**
+   * Create an Aster WebSocket client paired with a V3 REST API instance
+   * @param {object} asterV3Api - AsterAPIV3 instance (from createExchange)
+   * @param {string} [environment='production'] - 'production' or 'testnet'
+   * @returns {AsterWebSocket} WebSocket client instance
+   */
+  static createAsterWebSocket(asterV3Api, environment = 'production') {
+    if (!asterV3Api || asterV3Api.apiVersion !== 'v3') {
+      throw new Error('Aster WebSocket requires a V3 API instance');
+    }
+    const ws = new AsterWebSocket({
+      restApi: asterV3Api,
+      environment: environment,
+      wsUrl: asterV3Api.wsUrl,
+    });
+    logger.info(`✅ Aster WebSocket client created (${environment})`);
+    return ws;
+  }
+
+  /**
    * Get list of supported exchanges
    * @returns {array} List of supported exchange names
    */
@@ -433,12 +476,33 @@ class ExchangeFactory {
     const name = exchangeName.toLowerCase();
     
     switch (name) {
-      case 'aster':
+      case 'aster': {
+        const asterExtra = credentials.extra || credentials.extra_metadata || {};
+        // Detect V3 credentials (wallet-based auth)
+        if (asterExtra.api_version === 'v3' || asterExtra.user_address) {
+          const isTestnet = credentials.environment === 'testnet';
+          logger.info(`🔐 Loading Aster V3 credentials (${credentials.environment || 'production'})`);
+          return {
+            apiVersion: 'v3',
+            userAddress: asterExtra.user_address,
+            signerAddress: asterExtra.signer_address,
+            privateKey: asterExtra.private_key,
+            apiUrl: asterExtra.apiUrl || (isTestnet
+              ? 'https://fapi.asterdex-testnet.com'
+              : 'https://fapi.asterdex.com'),
+            wsUrl: asterExtra.wsUrl || (isTestnet
+              ? 'wss://fstream.asterdex-testnet.com'
+              : 'wss://fstream.asterdex.com'),
+            environment: credentials.environment || 'production',
+          };
+        }
+        // Legacy V1/V2 credentials (HMAC auth)
         return {
           apiKey: credentials.apiKey,
           apiSecret: credentials.apiSecret,
-          apiUrl: credentials.extra?.apiUrl || 'https://fapi.asterdex.com',
+          apiUrl: asterExtra.apiUrl || 'https://fapi.asterdex.com',
         };
+      }
       
       case 'oanda':
         return {

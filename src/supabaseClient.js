@@ -559,7 +559,7 @@ async function getBotCredentials() {
  * @param {string} exchange - The exchange name (e.g., 'aster', 'oanda')
  * @returns {Promise<Object|null>} - Credentials object or null if not found
  */
-async function getUserExchangeCredentials(userId, exchange) {
+async function getUserExchangeCredentials(userId, exchange, environment = 'production') {
   if (!supabase) {
     console.error('❌ Supabase not configured, cannot fetch user credentials');
     return null;
@@ -576,7 +576,7 @@ async function getUserExchangeCredentials(userId, exchange) {
   }
 
   const exchangeLower = exchange.toLowerCase();
-  const cacheKey = `credentials:${userId}:${exchangeLower}`;
+  const cacheKey = `credentials:${userId}:${exchangeLower}:${environment}`;
 
   // Try to use Redis cache if available
   try {
@@ -585,7 +585,7 @@ async function getUserExchangeCredentials(userId, exchange) {
     if (isRedisAvailable()) {
       return await getOrSetCache(
         cacheKey,
-        () => fetchCredentialsFromDb(userId, exchangeLower),
+        () => fetchCredentialsFromDb(userId, exchangeLower, environment),
         60 // Cache for 60 seconds
       );
     }
@@ -595,21 +595,21 @@ async function getUserExchangeCredentials(userId, exchange) {
   }
 
   // Direct DB fetch (fallback if Redis not available)
-  return await fetchCredentialsFromDb(userId, exchangeLower);
+  return await fetchCredentialsFromDb(userId, exchangeLower, environment);
 }
 
 /**
  * Internal function to fetch credentials from Supabase
  * @private
  */
-async function fetchCredentialsFromDb(userId, exchange) {
+async function fetchCredentialsFromDb(userId, exchange, environment = 'production') {
   try {
     const { data, error } = await supabase
       .from('bot_credentials')
       .select('*')
       .eq('user_id', userId)
       .eq('exchange', exchange)
-      .eq('environment', 'production')
+      .eq('environment', environment)
       .maybeSingle();
 
     if (error) {
@@ -622,7 +622,13 @@ async function fetchCredentialsFromDb(userId, exchange) {
       return null;
     }
 
-    console.log(`✅ Loaded ${exchange} credentials for user ${userId} (label: ${data.label || 'default'})`);
+    // Merge extra_config and extra_metadata (extra_metadata takes precedence)
+    const extraConfig = data.extra_config || {};
+    const extraMetadata = data.extra_metadata || {};
+    const mergedExtra = { ...extraConfig, ...extraMetadata };
+    
+    const apiVersion = mergedExtra.api_version || 'v1';
+    console.log(`✅ Loaded ${exchange} credentials for user ${userId} (label: ${data.label || 'default'}, version: ${apiVersion})`);
     
     return {
       userId: data.user_id,
@@ -634,7 +640,8 @@ async function fetchCredentialsFromDb(userId, exchange) {
       accountId: data.account_id,
       accessToken: data.access_token,
       environment: data.environment,
-      extra: data.extra_config || {},
+      extra: mergedExtra,
+      extra_metadata: extraMetadata,
     };
   } catch (error) {
     console.error(`❌ Exception fetching ${exchange} credentials for user ${userId}:`, error);

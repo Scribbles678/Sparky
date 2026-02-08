@@ -127,6 +127,7 @@ const positionUpdaters = {};
 const optionMonitors = {};
 let exchanges = {};
 let asterApi = null;
+let asterWs = null;  // Aster V3 WebSocket client
 let primaryPositionUpdater = null;
 let server;
 
@@ -268,14 +269,25 @@ app.get('/health', async (req, res) => {
       logger.logError('API health check failed', error);
     }
 
+    // WebSocket status (if V3)
+    const wsStatus = asterWs ? asterWs.getStatus() : null;
+
     res.json({
       status: 'ok',
       uptime: Math.floor(uptime),
       uptimeFormatted: `${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m`,
       apiStatus,
+      apiVersion: asterApi?.apiVersion || 'v1',
       balance: balance ? parseFloat(balance.availableBalance) : null,
       openPositions: summary.totalPositions,
       positions: summary.positions,
+      webSocket: wsStatus ? {
+        market: wsStatus.market.connected,
+        user: wsStatus.user.connected,
+        streams: wsStatus.market.streamCount,
+        messages: wsStatus.stats.marketMessages + wsStatus.stats.userMessages,
+        uptime: wsStatus.stats.uptime,
+      } : null,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
@@ -844,8 +856,33 @@ async function bootstrap() {
     }
 
     if (dbConnected && primaryPositionUpdater) {
+      // If Aster V3 is detected, wire up WebSocket for real-time updates
+      if (asterApi && asterApi.apiVersion === 'v3') {
+        try {
+          asterWs = ExchangeFactory.createAsterWebSocket(asterApi, asterApi.environment);
+          
+          // Attach WebSocket to position updater (enables WS mode)
+          primaryPositionUpdater.setWebSocket(asterWs);
+          
+          // Start WebSocket connections
+          const trackedSymbols = positionTracker.getAllPositions().map(p => p.symbol);
+          await asterWs.start({
+            allTickers: true,       // Subscribe to all tickers (for position updates)
+            userStream: true,       // Subscribe to user data stream (order fills, position changes)
+            tickerSymbols: trackedSymbols.length > 0 ? trackedSymbols : undefined,
+          });
+          
+          logger.info('✅ Aster V3 WebSocket connected (real-time position updates)');
+        } catch (wsError) {
+          logger.warn(`⚠️ Aster WebSocket failed to start: ${wsError.message}`);
+          logger.info('   Falling back to REST polling mode');
+          asterWs = null;
+        }
+      }
+      
       primaryPositionUpdater.start();
-      logger.info('✅ Position price updater started (updates every 30s)');
+      const mode = primaryPositionUpdater.wsMode ? 'WebSocket (real-time)' : 'REST polling (30s)';
+      logger.info(`✅ Position price updater started (${mode})`);
       logger.info('✅ Auto-sync enabled (syncs with exchange every 5 minutes)');
     } else if (dbConnected) {
       logger.info('ℹ️  Position price updater skipped (no legacy exchange configured)');
@@ -894,6 +931,16 @@ bootstrap().catch((error) => {
 
 const shutdown = async () => {
   logger.info('Shutting down gracefully...');
+
+  // Shutdown Aster WebSocket connections
+  if (asterWs) {
+    try {
+      await asterWs.shutdown();
+      logger.info('✅ Aster WebSocket shut down');
+    } catch (error) {
+      logger.warn('Failed to shutdown Aster WebSocket', error);
+    }
+  }
 
   // Stop position updaters
   Object.values(positionUpdaters).forEach((updater) => {
