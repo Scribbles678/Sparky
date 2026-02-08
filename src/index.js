@@ -42,7 +42,7 @@ try {
       tradeAmount: parseFloat(process.env.TRADE_AMOUNT) || 100,
       webhookSecret: process.env.WEBHOOK_SECRET,
       aster: {
-        apiUrl: process.env.ASTER_API_URL || 'https://api.aster.finance',
+        apiUrl: process.env.ASTER_API_URL || 'https://fapi.asterdex.com',
         apiKey: process.env.ASTER_API_KEY,
         apiSecret: process.env.ASTER_API_SECRET,
       },
