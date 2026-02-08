@@ -423,6 +423,10 @@ app.get('/balance/testnet', async (req, res) => {
     // Use getAccountInfo for comprehensive balance (includes unrealized PnL)
     const accountInfo = await api.getAccountInfo();
 
+    // Log full account info keys and balance-related fields for debugging
+    logger.info(`Testnet account keys: ${Object.keys(accountInfo).join(', ')}`);
+    logger.info(`Testnet balance fields: totalMarginBalance=${accountInfo?.totalMarginBalance}, totalWalletBalance=${accountInfo?.totalWalletBalance}, availableBalance=${accountInfo?.availableBalance}, totalUnrealizedProfit=${accountInfo?.totalUnrealizedProfit}, totalCrossWalletBalance=${accountInfo?.totalCrossWalletBalance}, maxWithdrawAmount=${accountInfo?.maxWithdrawAmount}`);
+
     // totalMarginBalance = equity (wallet + unrealized PnL) - matches "Perp total value" on Aster UI
     // totalWalletBalance = deposited funds only
     // availableBalance = margin available for new positions
