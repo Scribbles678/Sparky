@@ -30,7 +30,7 @@ const logger = require('../utils/logger');
 const EIP712_DOMAIN = {
   name: 'AsterSignTransaction',
   version: '1',
-  chainId: 714,
+  chainId: 1666,
   verifyingContract: '0x0000000000000000000000000000000000000000'
 };
 
