@@ -104,8 +104,12 @@ class AsterWebSocket extends EventEmitter {
    */
   async subscribeMarketStreams(streams) {
     // Add to tracked streams
+    // NOTE: Only lowercase the symbol portion (before @), NOT the stream type.
+    // Aster stream names are case-sensitive: "btcusdt@aggTrade" works,
+    // "btcusdt@aggtrade" is silently ignored. Stream types like aggTrade,
+    // miniTicker, bookTicker, markPrice, forceOrder must keep their camelCase.
     for (const stream of streams) {
-      this.marketStreams.add(stream.toLowerCase());
+      this.marketStreams.add(this._normalizeStreamName(stream));
     }
 
     // If already connected, send subscribe message via live subscription
@@ -131,7 +135,7 @@ class AsterWebSocket extends EventEmitter {
    */
   unsubscribeMarketStreams(streams) {
     for (const stream of streams) {
-      this.marketStreams.delete(stream.toLowerCase());
+      this.marketStreams.delete(this._normalizeStreamName(stream));
     }
 
     if (this.marketWs && this.marketWs.readyState === WebSocket.OPEN) {
@@ -215,7 +219,7 @@ class AsterWebSocket extends EventEmitter {
   _sendMarketSubscribe(streams) {
     const msg = {
       method: 'SUBSCRIBE',
-      params: streams.map(s => s.toLowerCase()),
+      params: streams.map(s => this._normalizeStreamName(s)),
       id: Date.now(),
     };
     this.marketWs.send(JSON.stringify(msg));
@@ -229,11 +233,41 @@ class AsterWebSocket extends EventEmitter {
   _sendMarketUnsubscribe(streams) {
     const msg = {
       method: 'UNSUBSCRIBE',
-      params: streams.map(s => s.toLowerCase()),
+      params: streams.map(s => this._normalizeStreamName(s)),
       id: Date.now(),
     };
     this.marketWs.send(JSON.stringify(msg));
     logger.info(`🔇 Unsubscribed from ${streams.length} stream(s)`);
+  }
+
+  /**
+   * Normalize a stream name: lowercase the symbol prefix but preserve
+   * the camelCase stream type (e.g., aggTrade, miniTicker, bookTicker).
+   * 
+   * Aster's WebSocket is case-sensitive for stream types:
+   *   - "btcusdt@aggTrade" ✅ works
+   *   - "btcusdt@aggtrade" ❌ silently ignored
+   * 
+   * @param {string} stream - e.g., 'BTCUSDT@aggTrade', 'btcusdt@depth10@500ms'
+   * @returns {string} Normalized stream name
+   * @private
+   */
+  _normalizeStreamName(stream) {
+    // Global streams like !miniTicker@arr, !ticker@arr, !forceOrder@arr
+    if (stream.startsWith('!')) {
+      return stream;  // Keep as-is
+    }
+    
+    // Split on first '@' to separate symbol from stream type
+    const atIndex = stream.indexOf('@');
+    if (atIndex === -1) {
+      return stream.toLowerCase();  // No '@', just lowercase the whole thing
+    }
+    
+    // Lowercase only the symbol part, keep stream type as-is
+    const symbol = stream.substring(0, atIndex).toLowerCase();
+    const streamType = stream.substring(atIndex);  // includes the '@'
+    return symbol + streamType;
   }
 
   /**
