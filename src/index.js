@@ -139,6 +139,7 @@ const optionMonitors = {};
 let exchanges = {};
 let asterApi = null;
 let asterWs = null;  // Aster V3 WebSocket client
+let microstructureCollector = null;  // Order book + trade flow collector for ML
 let primaryPositionUpdater = null;
 let server;
 
@@ -213,6 +214,65 @@ app.use('/api/market-data', marketDataRouter);
 // AI webhook routes (internal use only)
 const webhookAiRouter = require('./routes/webhookAi');
 app.use('/webhook', webhookAiRouter);
+
+// ==================== Microstructure API (for Arthur ML) ====================
+
+/**
+ * Get microstructure collector status and health info.
+ * NOTE: Must be registered BEFORE the :symbol route so "status" isn't captured as a symbol param.
+ */
+app.get('/api/microstructure/status', (req, res) => {
+  try {
+    if (!microstructureCollector) {
+      return res.json({
+        success: true,
+        running: false,
+        message: 'Microstructure collector not initialized (WebSocket may not be available)',
+      });
+    }
+
+    res.json({
+      success: true,
+      ...microstructureCollector.getStatus(),
+    });
+  } catch (error) {
+    logger.logError('Microstructure status error', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * Get cached microstructure data (order book snapshots + trades) for a symbol.
+ * Used by Arthur's pattern scanner to calculate real microstructure features.
+ */
+app.get('/api/microstructure/:symbol', (req, res) => {
+  try {
+    if (!microstructureCollector) {
+      return res.status(503).json({
+        success: false,
+        error: 'Microstructure collector not initialized',
+      });
+    }
+
+    const symbol = req.params.symbol.toUpperCase().replace('/', '');
+    const data = microstructureCollector.getData(symbol);
+
+    if (!data) {
+      return res.status(404).json({
+        success: false,
+        error: `Symbol ${symbol} not tracked. Available: ${microstructureCollector.getTrackedSymbols().join(', ')}`,
+      });
+    }
+
+    res.json({
+      success: true,
+      ...data,
+    });
+  } catch (error) {
+    logger.logError('Microstructure data fetch error', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 /**
  * AI Worker health check endpoint
@@ -964,6 +1024,17 @@ async function bootstrap() {
           });
           
           logger.info('✅ Aster V3 WebSocket connected (real-time position updates)');
+
+          // Start microstructure data collector (order book + trade flow for ML)
+          try {
+            const MicrostructureCollector = require('./services/microstructureCollector');
+            microstructureCollector = new MicrostructureCollector(asterWs);
+            await microstructureCollector.start();
+            logger.info('✅ Microstructure collector started (order book + trade flow for ML)');
+          } catch (mcError) {
+            logger.warn(`⚠️ Microstructure collector failed to start: ${mcError.message}`);
+            microstructureCollector = null;
+          }
         } catch (wsError) {
           logger.warn(`⚠️ Aster WebSocket failed to start: ${wsError.message}`);
           logger.info('   Falling back to REST polling mode');
@@ -1022,6 +1093,16 @@ bootstrap().catch((error) => {
 
 const shutdown = async () => {
   logger.info('Shutting down gracefully...');
+
+  // Shutdown Microstructure collector
+  if (microstructureCollector) {
+    try {
+      microstructureCollector.stop();
+      logger.info('✅ Microstructure collector shut down');
+    } catch (error) {
+      logger.warn('Failed to shutdown Microstructure collector', error);
+    }
+  }
 
   // Shutdown Aster WebSocket connections
   if (asterWs) {
