@@ -389,6 +389,60 @@ app.get('/health', async (req, res) => {
 });
 
 /**
+ * Get testnet account balance
+ * Creates a testnet V3 API instance on-the-fly and fetches the USDT balance
+ */
+app.get('/balance/testnet', async (req, res) => {
+  try {
+    let api = null;
+
+    // Try user-specific credential first, then fall back to environment-based lookup
+    const userId = req.query.userId;
+    if (userId) {
+      api = await ExchangeFactory.createExchangeForUser(userId, 'aster', 'testnet');
+    } else {
+      const { getExchangeCredentialsByEnvironment } = require('./supabaseClient');
+      const testnetCreds = await getExchangeCredentialsByEnvironment('aster', 'testnet');
+      if (testnetCreds) {
+        const testnetConfig = ExchangeFactory.mapCredentialsToConfig('aster', testnetCreds);
+        if (testnetConfig) {
+          api = ExchangeFactory.createExchange('aster', testnetConfig);
+        }
+      }
+    }
+
+    if (!api) {
+      return res.json({
+        success: false,
+        exchange: 'Aster Testnet',
+        balance: null,
+        error: 'Testnet credentials not configured',
+      });
+    }
+
+    const balances = await api.getBalance();
+    const usdtBalance = balances.find(b => b.asset === 'USDT');
+
+    res.json({
+      success: true,
+      exchange: 'Aster Testnet',
+      balance: usdtBalance ? parseFloat(usdtBalance.balance || usdtBalance.availableBalance || '0') : 0,
+      availableBalance: usdtBalance ? parseFloat(usdtBalance.availableBalance || '0') : 0,
+      crossWalletBalance: usdtBalance ? parseFloat(usdtBalance.crossWalletBalance || '0') : 0,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    logger.logError('Testnet balance check failed', error);
+    res.json({
+      success: false,
+      exchange: 'Aster Testnet',
+      balance: null,
+      error: error.message,
+    });
+  }
+});
+
+/**
  * Get current positions
  */
 app.get('/positions', (req, res) => {
