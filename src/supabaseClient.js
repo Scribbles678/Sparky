@@ -650,6 +650,64 @@ async function fetchCredentialsFromDb(userId, exchange, environment = 'productio
 }
 
 /**
+ * Fetch exchange credentials by environment (without requiring userId).
+ * Used for loading testnet credentials when no specific user is known.
+ * Returns the first matching credential found.
+ * 
+ * @param {string} exchange - Exchange name (e.g., 'aster')
+ * @param {string} environment - Environment ('testnet', 'production', etc.)
+ * @returns {Promise<Object|null>} - Credentials object or null if not found
+ */
+async function getExchangeCredentialsByEnvironment(exchange, environment) {
+  if (!supabase) {
+    console.error('❌ Supabase not configured, cannot fetch exchange credentials');
+    return null;
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('bot_credentials')
+      .select('*')
+      .eq('exchange', exchange.toLowerCase())
+      .eq('environment', environment)
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      console.error(`❌ Error fetching ${exchange} ${environment} credentials:`, error);
+      return null;
+    }
+
+    if (!data) {
+      console.warn(`⚠️ No ${exchange} ${environment} credentials found`);
+      return null;
+    }
+
+    const extraConfig = data.extra_config || {};
+    const extraMetadata = data.extra_metadata || {};
+    const mergedExtra = { ...extraConfig, ...extraMetadata };
+    
+    console.log(`✅ Loaded ${exchange} ${environment} credentials (label: ${data.label || 'default'})`);
+    
+    return {
+      userId: data.user_id,
+      exchange: data.exchange,
+      label: data.label,
+      apiKey: data.api_key,
+      apiSecret: data.api_secret,
+      accountId: data.account_id,
+      accessToken: data.access_token,
+      environment: data.environment,
+      extra: mergedExtra,
+      extra_metadata: extraMetadata,
+    };
+  } catch (error) {
+    console.error(`❌ Exception fetching ${exchange} ${environment} credentials:`, error);
+    return null;
+  }
+}
+
+/**
  * In-memory cache for webhook credentials
  * Maps webhook_secret -> { userId, exchange, label }
  */
@@ -877,6 +935,7 @@ module.exports = {
   getExchangeTradeSettings,
   getBotCredentials,
   getUserExchangeCredentials,  // NEW: Per-user credential loading for multi-tenant
+  getExchangeCredentialsByEnvironment,  // Fetch credentials by environment (no userId required)
   validateWebhookSecret,
   validateWebhookSecretFromDb,
   initializeCredentialCache,

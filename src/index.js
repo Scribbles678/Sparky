@@ -333,11 +333,34 @@ app.get('/positions', (req, res) => {
  */
 app.get('/positions/exchange', async (req, res) => {
   try {
-    if (!asterApi) {
+    const environment = req.query.environment || 'production';
+    let api = asterApi;
+
+    // For testnet requests, dynamically create a testnet API instance
+    if (environment === 'testnet') {
+      logger.info('📡 Fetching testnet positions - creating testnet API instance...');
+      const userId = req.query.userId || null;
+      if (userId) {
+        api = await ExchangeFactory.createExchangeForUser(userId, 'aster', 'testnet');
+      } else {
+        // Load testnet credentials without requiring a specific userId
+        const { getExchangeCredentialsByEnvironment } = require('./supabaseClient');
+        const testnetCreds = await getExchangeCredentialsByEnvironment('aster', 'testnet');
+        if (testnetCreds) {
+          const testnetConfig = ExchangeFactory.mapCredentialsToConfig('aster', testnetCreds);
+          if (testnetConfig) {
+            api = ExchangeFactory.createExchange('aster', testnetConfig);
+          }
+        }
+      }
+      if (!api) {
+        return res.status(503).json({ success: false, error: 'Testnet exchange API not available - no testnet credentials found' });
+      }
+    } else if (!api) {
       return res.status(503).json({ success: false, error: 'Exchange API not initialized' });
     }
 
-    const rawPositions = await asterApi.getPositions();
+    const rawPositions = await api.getPositions();
     const activePositions = (rawPositions || []).filter(p => parseFloat(p.positionAmt) !== 0);
 
     // Normalize to a consistent format
@@ -370,7 +393,8 @@ app.get('/positions/exchange', async (req, res) => {
     res.json({
       success: true,
       exchange: 'aster',
-      apiVersion: asterApi.apiVersion || 'v1',
+      environment,
+      apiVersion: api.apiVersion || 'v1',
       count: positions.length,
       positions,
     });
@@ -684,8 +708,10 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
     
     if (userId) {
       // MULTI-TENANT: Load user's exchange credentials from Supabase
-      logger.info(`🔐 Loading ${exchange} credentials for user ${userId}...`);
-      exchangeApi = await ExchangeFactory.createExchangeForUser(userId, exchange);
+      // Support testnet environment from Signal Monitor webhook payload
+      const environment = alertData.environment || 'production';
+      logger.info(`🔐 Loading ${exchange} credentials for user ${userId} (${environment})...`);
+      exchangeApi = await ExchangeFactory.createExchangeForUser(userId, exchange, environment);
       
       if (!exchangeApi) {
         // Send notification about missing credentials
