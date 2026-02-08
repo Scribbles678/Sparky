@@ -647,6 +647,105 @@ class AsterAPIV3 {
   }
 
   /**
+   * Place a bracket order: entry (market) + take profit + stop loss in a single batch API call.
+   * This ensures TP/SL are placed atomically with the entry, reducing the risk of
+   * orphaned positions without brackets.
+   *
+   * @param {string} symbol - Trading symbol (e.g., 'BTCUSDT')
+   * @param {string} side - Entry side: 'BUY' or 'SELL'
+   * @param {number|string} quantity - Order quantity
+   * @param {number|string} tpPrice - Take profit trigger price
+   * @param {number|string} slPrice - Stop loss trigger price
+   * @param {object} [options] - Optional: { trailingCallbackRate, activationPrice }
+   * @returns {Promise<object>} Batch order response with individual order results
+   */
+  async placeBracketOrderBatch(symbol, side, quantity, tpPrice, slPrice, options = {}) {
+    const exitSide = side.toUpperCase() === 'BUY' ? 'SELL' : 'BUY';
+    const qty = String(quantity);
+
+    const orders = [
+      // 1. Entry order (market)
+      {
+        symbol,
+        side: side.toUpperCase(),
+        type: 'MARKET',
+        quantity: qty,
+      },
+      // 2. Take profit (reduce-only)
+      {
+        symbol,
+        side: exitSide,
+        type: 'TAKE_PROFIT_MARKET',
+        stopPrice: String(tpPrice),
+        quantity: qty,
+        reduceOnly: 'true',
+      },
+    ];
+
+    // 3. Stop loss — either trailing or fixed
+    if (options.trailingCallbackRate) {
+      const trailingOrder = {
+        symbol,
+        side: exitSide,
+        type: 'TRAILING_STOP_MARKET',
+        quantity: qty,
+        callbackRate: String(options.trailingCallbackRate),
+        reduceOnly: 'true',
+      };
+      if (options.activationPrice) {
+        trailingOrder.activationPrice = String(options.activationPrice);
+      }
+      orders.push(trailingOrder);
+    } else {
+      orders.push({
+        symbol,
+        side: exitSide,
+        type: 'STOP_MARKET',
+        stopPrice: String(slPrice),
+        quantity: qty,
+        reduceOnly: 'true',
+      });
+    }
+
+    logger.info(`📤 Placing V3 bracket order (entry + TP + SL)`, {
+      symbol,
+      side: side.toUpperCase(),
+      quantity: qty,
+      tpPrice,
+      slPrice,
+      trailing: !!options.trailingCallbackRate,
+    });
+
+    const result = await this.placeBatchOrders(orders);
+
+    // Parse batch response — each element corresponds to an order
+    // Aster returns array of results matching the order list
+    const parsed = {
+      success: true,
+      entryOrder: null,
+      takeProfitOrder: null,
+      stopLossOrder: null,
+      raw: result,
+    };
+
+    if (Array.isArray(result)) {
+      parsed.entryOrder = result[0];
+      parsed.takeProfitOrder = result[1];
+      parsed.stopLossOrder = result[2];
+
+      // Check for individual failures
+      for (let i = 0; i < result.length; i++) {
+        if (result[i]?.code && result[i].code < 0) {
+          const labels = ['Entry', 'TakeProfit', 'StopLoss'];
+          logger.warn(`⚠️ ${labels[i]} order failed in bracket batch: ${result[i].msg} (code: ${result[i].code})`);
+        }
+      }
+    }
+
+    return parsed;
+  }
+
+  /**
    * Close position (market order with reduceOnly)
    * @param {string} symbol - Trading symbol
    * @param {string} side - Close side ('BUY' to close short, 'SELL' to close long)

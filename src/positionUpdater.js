@@ -587,6 +587,18 @@ class PositionUpdater {
         exchange: this.api.exchangeName || 'aster', // Use actual exchange name
       });
       
+      // Cancel remaining bracket orders (TP or SL that didn't trigger)
+      // When exchange TP/SL fills, the other side is still open and must be cleaned up
+      if (this.api.cancelAllOrders) {
+        try {
+          await this.api.cancelAllOrders(position.symbol);
+          logger.info(`🧹 Cancelled remaining open orders for ${position.symbol} (bracket cleanup)`);
+        } catch (cancelErr) {
+          // Not critical — the order may have already been cancelled or expired
+          logger.debug(`Could not cancel remaining orders for ${position.symbol}: ${cancelErr.message}`);
+        }
+      }
+      
       // Remove from database positions table
       await removePosition(position.symbol);
       

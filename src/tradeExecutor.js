@@ -522,6 +522,63 @@ class TradeExecutor {
         if (finalStopLoss) stopLossOrderId = 'oto_sl';
         
         logger.info('OTO order placed successfully', { orderId: orderResult.orderId });
+      } else if (this.api.exchangeName === 'aster' && this.api.placeBracketOrderBatch && finalStopLoss && finalTakeProfit) {
+        // Aster V3 batch bracket order: entry + TP + SL in one API call
+        const stopPrice = calculateStopLoss(side, entryPrice, finalStopLoss);
+        const tpPrice = calculateTakeProfit(side, entryPrice, finalTakeProfit);
+        const roundedStopPrice = roundPrice(stopPrice);
+        const roundedTpPrice = roundPrice(tpPrice);
+        
+        // Check if trailing stop is requested
+        const batchOptions = {};
+        if (finalUseTrailingStop && (finalTrailingStop || finalTrailingStopPercent)) {
+          batchOptions.trailingCallbackRate = finalTrailingStopPercent || finalTrailingStop;
+        }
+        
+        logger.info('Using Aster V3 batch bracket order (entry + TP + SL in one call)', {
+          takeProfit: roundedTpPrice,
+          stopLoss: roundedStopPrice,
+          trailing: !!batchOptions.trailingCallbackRate,
+        });
+        
+        const bracketResult = await this.api.placeBracketOrderBatch(
+          symbol,
+          side,
+          roundedQuantity,
+          roundedTpPrice,
+          roundedStopPrice,
+          batchOptions
+        );
+        
+        // Extract entry order result
+        orderResult = bracketResult.entryOrder || bracketResult;
+        
+        // Mark TP/SL as placed so we don't place them again in Step 6
+        if (bracketResult.takeProfitOrder && !bracketResult.takeProfitOrder.code) {
+          takeProfitOrderId = bracketResult.takeProfitOrder.orderId || 'batch_tp';
+        }
+        if (bracketResult.stopLossOrder && !bracketResult.stopLossOrder.code) {
+          stopLossOrderId = bracketResult.stopLossOrder.orderId || 'batch_sl';
+          stopLossType = batchOptions.trailingCallbackRate ? 'TRAILING' : 'REGULAR';
+        }
+        
+        logger.info('Aster batch bracket order placed', {
+          entryOrderId: orderResult?.orderId,
+          takeProfitOrderId,
+          stopLossOrderId,
+          stopLossType,
+        });
+        
+        // If any bracket leg failed, log warning but don't fail the trade
+        // Step 6 will attempt to place missing TP/SL individually
+        if (bracketResult.takeProfitOrder?.code && bracketResult.takeProfitOrder.code < 0) {
+          takeProfitOrderId = null; // Will be retried in Step 6
+          logger.warn(`Batch TP order failed: ${bracketResult.takeProfitOrder.msg}, will retry individually`);
+        }
+        if (bracketResult.stopLossOrder?.code && bracketResult.stopLossOrder.code < 0) {
+          stopLossOrderId = null; // Will be retried in Step 6
+          logger.warn(`Batch SL order failed: ${bracketResult.stopLossOrder.msg}, will retry individually`);
+        }
       } else {
         // Standard order placement (market or limit)
         if (shouldUseFractional && isAlpaca) {
@@ -596,9 +653,10 @@ class TradeExecutor {
           // Step 6a: Place stop loss (regular, trailing, or stop-limit)
           if (finalStopLoss || finalTrailingStop) {
             try {
-              // Check if we want trailing stop (OANDA or Alpaca)
+              // Check if we want trailing stop (OANDA, Alpaca, or Aster)
               const isOanda = this.api.exchangeName === 'oanda';
-              const useTrailing = (isOanda || isAlpaca) && (finalUseTrailingStop || finalTrailingStop || finalTrailingStopPercent);
+              const isAster = this.api.exchangeName === 'aster';
+              const useTrailing = (isOanda || isAlpaca || isAster) && (finalUseTrailingStop || finalTrailingStop || finalTrailingStopPercent);
               
               if (useTrailing && (finalTrailingStop || finalTrailingStopPercent)) {
                 // Place trailing stop (OANDA uses pips, Alpaca uses $ or %)
@@ -642,6 +700,25 @@ class TradeExecutor {
                     orderId: stopLossOrderId,
                     trailPrice,
                     trailPercent,
+                    type: 'TRAILING',
+                  });
+                } else if (isAster && (finalTrailingStop || finalTrailingStopPercent)) {
+                  // Aster trailing stop (callback rate in percent, e.g., 1 = 1%)
+                  const callbackRate = finalTrailingStopPercent || finalTrailingStop;
+                  
+                  const stopLossResult = await this.api.placeTrailingStop(
+                    symbol,
+                    getOppositeSide(side),
+                    roundedQuantity,
+                    callbackRate
+                  );
+
+                  stopLossOrderId = stopLossResult.orderId;
+                  stopLossType = 'TRAILING';
+                  
+                  logger.info(`Aster trailing stop placed`, {
+                    orderId: stopLossOrderId,
+                    callbackRate,
                     type: 'TRAILING',
                   });
                 }
@@ -930,21 +1007,38 @@ class TradeExecutor {
 
       // Cancel stop loss and take profit orders if they exist
       if (trackedPosition) {
-        if (trackedPosition.stopLossOrderId) {
+        const isAsterExchange = this.api.exchangeName === 'aster';
+        
+        if (isAsterExchange && this.api.cancelAllOrders) {
+          // For Aster: cancel ALL open orders for this symbol at once.
+          // This is more robust than individual cancels because:
+          // 1. One side (TP or SL) may have already filled, causing individual cancel to fail
+          // 2. Batch-placed orders may use different IDs than tracked
+          // 3. Catches any orphaned orders from previous trades
           try {
-            await this.api.cancelOrder(symbol, trackedPosition.stopLossOrderId);
-            logger.info(`Cancelled stop loss order ${trackedPosition.stopLossOrderId}`);
+            await this.api.cancelAllOrders(symbol);
+            logger.info(`Cancelled all open orders for ${symbol} (Aster cleanup)`);
           } catch (error) {
-            logger.logError('Failed to cancel stop loss', error, { symbol });
+            logger.logError('Failed to cancel all orders', error, { symbol });
           }
-        }
+        } else {
+          // For other exchanges: cancel individual TP/SL orders
+          if (trackedPosition.stopLossOrderId) {
+            try {
+              await this.api.cancelOrder(symbol, trackedPosition.stopLossOrderId);
+              logger.info(`Cancelled stop loss order ${trackedPosition.stopLossOrderId}`);
+            } catch (error) {
+              logger.logError('Failed to cancel stop loss', error, { symbol });
+            }
+          }
 
-        if (trackedPosition.takeProfitOrderId) {
-          try {
-            await this.api.cancelOrder(symbol, trackedPosition.takeProfitOrderId);
-            logger.info(`Cancelled take profit order ${trackedPosition.takeProfitOrderId}`);
-          } catch (error) {
-            logger.logError('Failed to cancel take profit', error, { symbol });
+          if (trackedPosition.takeProfitOrderId) {
+            try {
+              await this.api.cancelOrder(symbol, trackedPosition.takeProfitOrderId);
+              logger.info(`Cancelled take profit order ${trackedPosition.takeProfitOrderId}`);
+            } catch (error) {
+              logger.logError('Failed to cancel take profit', error, { symbol });
+            }
           }
         }
       }
