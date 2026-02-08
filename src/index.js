@@ -111,6 +111,17 @@ async function applySupabaseCredentials() {
       if (entry.passphrase) {
         config[configKey].passphrase = entry.passphrase;
       }
+      // Carry extra_metadata for V3 wallet-based auth (Aster V3, etc.)
+      if (entry.extra_metadata && typeof entry.extra_metadata === 'object') {
+        const meta = entry.extra_metadata;
+        if (meta.api_version === 'v3') {
+          config[configKey].apiVersion = 'v3';
+          config[configKey].userAddress = meta.user_address;
+          config[configKey].signerAddress = meta.signer_address;
+          config[configKey].privateKey = meta.private_key;
+          logger.info(`🔐 V3 wallet credentials detected for ${entry.exchange}`);
+        }
+      }
     });
   } catch (error) {
     logger.warn(`Failed to load credentials from Supabase: ${error.message}`);
