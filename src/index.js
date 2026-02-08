@@ -327,6 +327,60 @@ app.get('/positions', (req, res) => {
 });
 
 /**
+ * Full exchange positions endpoint
+ * Returns raw position data from the exchange API (V3-compatible)
+ * Used by SignalStudio's trade sync endpoint
+ */
+app.get('/positions/exchange', async (req, res) => {
+  try {
+    if (!asterApi) {
+      return res.status(503).json({ success: false, error: 'Exchange API not initialized' });
+    }
+
+    const rawPositions = await asterApi.getPositions();
+    const activePositions = (rawPositions || []).filter(p => parseFloat(p.positionAmt) !== 0);
+
+    // Normalize to a consistent format
+    const positions = activePositions.map(p => {
+      const positionAmt = parseFloat(p.positionAmt);
+      const entryPrice = parseFloat(p.entryPrice);
+      const markPrice = parseFloat(p.markPrice || 0);
+      const notional = parseFloat(p.notional || 0);
+      const unrealizedProfit = parseFloat(p.unrealizedProfit || p.unRealizedProfit || 0);
+      const quantity = Math.abs(positionAmt);
+      const positionSizeUsd = Math.abs(notional) || (quantity * markPrice);
+
+      return {
+        symbol: p.symbol,
+        positionAmt: p.positionAmt,
+        entryPrice: p.entryPrice,
+        markPrice: p.markPrice || String(markPrice),
+        notional: p.notional || String(notional),
+        unrealizedProfit: String(unrealizedProfit),
+        positionSide: p.positionSide || 'BOTH',
+        // Normalized fields for easy consumption
+        side: positionAmt > 0 ? 'BUY' : 'SELL',
+        quantity,
+        positionSizeUsd,
+        unrealizedPnlUsd: unrealizedProfit,
+        unrealizedPnlPercent: positionSizeUsd > 0 ? (unrealizedProfit / positionSizeUsd) * 100 : 0,
+      };
+    });
+
+    res.json({
+      success: true,
+      exchange: 'aster',
+      apiVersion: asterApi.apiVersion || 'v1',
+      count: positions.length,
+      positions,
+    });
+  } catch (error) {
+    logger.logError('Failed to get exchange positions', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
  * TradingView webhook endpoint
  * 
  * NOTE: This endpoint now receives pre-built orders from SignalStudio.
