@@ -423,34 +423,37 @@ app.get('/balance/testnet', async (req, res) => {
     // Use getAccountInfo for comprehensive balance (includes unrealized PnL)
     const accountInfo = await api.getAccountInfo();
 
-    // Extract balance-related fields
-    const totalMargin = parseFloat(accountInfo?.totalMarginBalance || '0');
-    const totalWallet = parseFloat(accountInfo?.totalWalletBalance || '0');
-    const available = parseFloat(accountInfo?.availableBalance || '0');
-    const unrealizedPnl = parseFloat(accountInfo?.totalUnrealizedProfit || '0');
-    const maxWithdraw = parseFloat(accountInfo?.maxWithdrawAmount || '0');
-    const crossWallet = parseFloat(accountInfo?.totalCrossWalletBalance || '0');
+    // Multi-Asset Mode: sum margin balances across ALL assets (USDT + ASTER + BTC etc.)
+    // This matches the "Perp total value" shown on the Aster UI
+    const assets = accountInfo?.assets || [];
+    let totalEquity = 0;
+    const assetBreakdown = [];
 
-    // If debug query param, return raw account info for inspection
-    if (req.query.debug === 'true') {
-      return res.json({
-        success: true,
-        exchange: 'Aster Testnet',
-        raw: accountInfo,
-        timestamp: new Date().toISOString(),
-      });
+    for (const asset of assets) {
+      const marginBal = parseFloat(asset.marginBalance || '0');
+      const availBal = parseFloat(asset.availableBalance || '0');
+      if (marginBal > 0 || availBal > 0) {
+        totalEquity += marginBal;
+        assetBreakdown.push({
+          asset: asset.asset,
+          marginBalance: marginBal,
+          walletBalance: parseFloat(asset.walletBalance || '0'),
+          availableBalance: availBal,
+        });
+      }
     }
 
-    // Use availableBalance as primary (matches "Avbl" on Aster UI)
+    // availableBalance from the top-level is already the multi-asset aggregate
+    const available = parseFloat(accountInfo?.availableBalance || '0');
+    const unrealizedPnl = parseFloat(accountInfo?.totalUnrealizedProfit || '0');
+
     res.json({
       success: true,
       exchange: 'Aster Testnet',
-      balance: totalMargin,
+      balance: totalEquity,
       availableBalance: available,
-      totalWalletBalance: totalWallet,
       totalUnrealizedPnl: unrealizedPnl,
-      maxWithdrawAmount: maxWithdraw,
-      totalCrossWalletBalance: crossWallet,
+      assets: assetBreakdown,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
