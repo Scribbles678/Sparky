@@ -483,6 +483,150 @@ app.get('/positions/exchange', async (req, res) => {
 });
 
 /**
+ * Close a specific position on the exchange (supports testnet)
+ * Used by the Testnet Execution Router for exit synchronization
+ */
+app.post('/positions/close', async (req, res) => {
+  try {
+    const { symbol, environment, userId, linked_exchange_id } = req.body;
+    
+    if (!symbol) {
+      return res.status(400).json({ success: false, error: 'symbol is required' });
+    }
+    
+    const env = environment || 'production';
+    let api = asterApi;
+    
+    if (env === 'testnet') {
+      if (userId) {
+        api = await ExchangeFactory.createExchangeForUser(userId, 'aster', 'testnet');
+      } else {
+        const { getExchangeCredentialsByEnvironment } = require('./supabaseClient');
+        const testnetCreds = await getExchangeCredentialsByEnvironment('aster', 'testnet');
+        if (testnetCreds) {
+          const testnetConfig = ExchangeFactory.mapCredentialsToConfig('aster', testnetCreds);
+          if (testnetConfig) {
+            api = ExchangeFactory.createExchange('aster', testnetConfig);
+          }
+        }
+      }
+    }
+    
+    if (!api) {
+      return res.status(503).json({ success: false, error: 'Exchange API not available' });
+    }
+    
+    // Get current position to determine side and quantity
+    const rawPositions = await api.getPositions();
+    const position = (rawPositions || []).find(p => {
+      const sym = p.symbol || '';
+      return sym === symbol && parseFloat(p.positionAmt) !== 0;
+    });
+    
+    if (!position) {
+      return res.json({ success: true, message: 'No open position found', already_closed: true });
+    }
+    
+    const positionAmt = parseFloat(position.positionAmt);
+    const closeSide = positionAmt > 0 ? 'SELL' : 'BUY';
+    const closeQuantity = Math.abs(positionAmt);
+    
+    logger.info(`📤 Closing ${env} position: ${symbol} ${closeSide} qty=${closeQuantity}`);
+    
+    const result = await api.placeOrder({
+      symbol,
+      side: closeSide,
+      type: 'MARKET',
+      quantity: closeQuantity,
+      reduceOnly: true,
+    });
+    
+    // Get fill price from result if available
+    const fillPrice = result?.avgPrice || result?.price || parseFloat(position.markPrice || 0);
+    
+    res.json({
+      success: true,
+      symbol,
+      side: closeSide,
+      quantity: closeQuantity,
+      fill_price: fillPrice,
+      orderId: result?.orderId,
+      environment: env,
+    });
+    
+  } catch (error) {
+    logger.logError('Failed to close position', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * Get recent fills/trades from the exchange (supports testnet)
+ * Returns recent trade history with order IDs, timestamps, and fees
+ */
+app.get('/positions/exchange/fills', async (req, res) => {
+  try {
+    const environment = req.query.environment || 'production';
+    const symbol = req.query.symbol || null;
+    const limit = parseInt(req.query.limit) || 50;
+    let api = asterApi;
+    
+    if (environment === 'testnet') {
+      const userId = req.query.userId || null;
+      if (userId) {
+        api = await ExchangeFactory.createExchangeForUser(userId, 'aster', 'testnet');
+      } else {
+        const { getExchangeCredentialsByEnvironment } = require('./supabaseClient');
+        const testnetCreds = await getExchangeCredentialsByEnvironment('aster', 'testnet');
+        if (testnetCreds) {
+          const testnetConfig = ExchangeFactory.mapCredentialsToConfig('aster', testnetCreds);
+          if (testnetConfig) {
+            api = ExchangeFactory.createExchange('aster', testnetConfig);
+          }
+        }
+      }
+    }
+    
+    if (!api) {
+      return res.status(503).json({ success: false, error: 'Exchange API not available' });
+    }
+    
+    // Fetch recent trades
+    let trades = [];
+    if (api.getTradeHistory) {
+      trades = await api.getTradeHistory(symbol ? { symbol, limit } : { limit });
+    } else if (api.getUserTrades) {
+      trades = await api.getUserTrades(symbol ? { symbol, limit } : { limit });
+    }
+    
+    // Normalize trade data
+    const fills = (trades || []).map(t => ({
+      orderId: t.orderId,
+      symbol: t.symbol,
+      side: t.side,
+      quantity: parseFloat(t.qty || t.quantity || 0),
+      price: parseFloat(t.price || 0),
+      commission: parseFloat(t.commission || t.fee || 0),
+      commissionAsset: t.commissionAsset || t.feeAsset || 'USDT',
+      time: t.time || t.timestamp,
+      realizedPnl: parseFloat(t.realizedPnl || t.realizedProfit || 0),
+      isMaker: t.isMaker || false,
+    }));
+    
+    res.json({
+      success: true,
+      exchange: 'aster',
+      environment,
+      count: fills.length,
+      fills,
+    });
+  } catch (error) {
+    logger.logError('Failed to get exchange fills', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
  * TradingView webhook endpoint
  * 
  * NOTE: This endpoint now receives pre-built orders from SignalStudio.
