@@ -423,18 +423,25 @@ app.get('/balance/testnet', async (req, res) => {
     // Use getAccountInfo for comprehensive balance (includes unrealized PnL)
     const accountInfo = await api.getAccountInfo();
 
-    // Log full account info keys and balance-related fields for debugging
-    logger.info(`Testnet account keys: ${Object.keys(accountInfo).join(', ')}`);
-    logger.info(`Testnet balance fields: totalMarginBalance=${accountInfo?.totalMarginBalance}, totalWalletBalance=${accountInfo?.totalWalletBalance}, availableBalance=${accountInfo?.availableBalance}, totalUnrealizedProfit=${accountInfo?.totalUnrealizedProfit}, totalCrossWalletBalance=${accountInfo?.totalCrossWalletBalance}, maxWithdrawAmount=${accountInfo?.maxWithdrawAmount}`);
-
-    // totalMarginBalance = equity (wallet + unrealized PnL) - matches "Perp total value" on Aster UI
-    // totalWalletBalance = deposited funds only
-    // availableBalance = margin available for new positions
+    // Extract balance-related fields
     const totalMargin = parseFloat(accountInfo?.totalMarginBalance || '0');
     const totalWallet = parseFloat(accountInfo?.totalWalletBalance || '0');
     const available = parseFloat(accountInfo?.availableBalance || '0');
     const unrealizedPnl = parseFloat(accountInfo?.totalUnrealizedProfit || '0');
+    const maxWithdraw = parseFloat(accountInfo?.maxWithdrawAmount || '0');
+    const crossWallet = parseFloat(accountInfo?.totalCrossWalletBalance || '0');
 
+    // If debug query param, return raw account info for inspection
+    if (req.query.debug === 'true') {
+      return res.json({
+        success: true,
+        exchange: 'Aster Testnet',
+        raw: accountInfo,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // Use availableBalance as primary (matches "Avbl" on Aster UI)
     res.json({
       success: true,
       exchange: 'Aster Testnet',
@@ -442,6 +449,8 @@ app.get('/balance/testnet', async (req, res) => {
       availableBalance: available,
       totalWalletBalance: totalWallet,
       totalUnrealizedPnl: unrealizedPnl,
+      maxWithdrawAmount: maxWithdraw,
+      totalCrossWalletBalance: crossWallet,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
