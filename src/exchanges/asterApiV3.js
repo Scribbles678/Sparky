@@ -27,10 +27,18 @@ const { ethers } = require('ethers');
 const logger = require('../utils/logger');
 
 // EIP-712 typed data structure for Aster V3 signing
-const EIP712_DOMAIN = {
+// chainId differs between production (1666) and testnet (714)
+const EIP712_DOMAIN_PRODUCTION = {
   name: 'AsterSignTransaction',
   version: '1',
   chainId: 1666,
+  verifyingContract: '0x0000000000000000000000000000000000000000'
+};
+
+const EIP712_DOMAIN_TESTNET = {
+  name: 'AsterSignTransaction',
+  version: '1',
+  chainId: 714,
   verifyingContract: '0x0000000000000000000000000000000000000000'
 };
 
@@ -60,6 +68,11 @@ class AsterAPIV3 {
     this.apiVersion = 'v3';
     this.maxRetries = 3;
     this.retryDelay = 1000;
+
+    // Select EIP-712 domain based on environment (testnet uses chainId 714, production uses 1666)
+    this.eip712Domain = this.environment === 'testnet'
+      ? EIP712_DOMAIN_TESTNET
+      : EIP712_DOMAIN_PRODUCTION;
 
     // Create ethers wallet for EIP-712 signing
     const privateKey = config.privateKey.startsWith('0x') 
@@ -104,7 +117,7 @@ class AsterAPIV3 {
   async signParams(paramString) {
     try {
       const signature = await this.wallet.signTypedData(
-        EIP712_DOMAIN,
+        this.eip712Domain,
         EIP712_TYPES,
         { msg: paramString }
       );
