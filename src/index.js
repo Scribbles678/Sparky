@@ -420,15 +420,24 @@ app.get('/balance/testnet', async (req, res) => {
       });
     }
 
-    const balances = await api.getBalance();
-    const usdtBalance = balances.find(b => b.asset === 'USDT');
+    // Use getAccountInfo for comprehensive balance (includes unrealized PnL)
+    const accountInfo = await api.getAccountInfo();
+
+    // totalMarginBalance = equity (wallet + unrealized PnL) - matches "Perp total value" on Aster UI
+    // totalWalletBalance = deposited funds only
+    // availableBalance = margin available for new positions
+    const totalMargin = parseFloat(accountInfo?.totalMarginBalance || '0');
+    const totalWallet = parseFloat(accountInfo?.totalWalletBalance || '0');
+    const available = parseFloat(accountInfo?.availableBalance || '0');
+    const unrealizedPnl = parseFloat(accountInfo?.totalUnrealizedProfit || '0');
 
     res.json({
       success: true,
       exchange: 'Aster Testnet',
-      balance: usdtBalance ? parseFloat(usdtBalance.balance || usdtBalance.availableBalance || '0') : 0,
-      availableBalance: usdtBalance ? parseFloat(usdtBalance.availableBalance || '0') : 0,
-      crossWalletBalance: usdtBalance ? parseFloat(usdtBalance.crossWalletBalance || '0') : 0,
+      balance: totalMargin,
+      availableBalance: available,
+      totalWalletBalance: totalWallet,
+      totalUnrealizedPnl: unrealizedPnl,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
