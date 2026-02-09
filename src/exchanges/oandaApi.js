@@ -179,20 +179,48 @@ class OandaAPI extends BaseExchangeAPI {
   // ==================== Order Methods ====================
 
   /**
-   * Place market order
+   * Place market order with optional native TP/SL brackets
+   * @param {string} symbol - Instrument name (e.g., EUR_USD)
+   * @param {string} side - BUY or SELL
+   * @param {number} quantity - Position size in units
+   * @param {Object} [options] - Optional bracket order parameters
+   * @param {number} [options.stopLossPrice] - Stop loss price (5 decimal places)
+   * @param {number} [options.takeProfitPrice] - Take profit price (5 decimal places)
+   * @param {number} [options.trailingStopDistance] - Trailing stop distance in price units (e.g., 0.0030 for 30 pips)
    */
-  async placeMarketOrder(symbol, side, quantity) {
+  async placeMarketOrder(symbol, side, quantity, options = {}) {
     const units = side.toUpperCase() === 'BUY' ? quantity : -quantity;
     
-    const orderData = {
-      order: {
-        type: 'MARKET',
-        instrument: symbol,
-        units: units.toString(),
-        timeInForce: 'FOK', // Fill or Kill
-        positionFill: 'DEFAULT',
-      }
+    const order = {
+      type: 'MARKET',
+      instrument: symbol,
+      units: units.toString(),
+      timeInForce: 'FOK', // Fill or Kill
+      positionFill: 'DEFAULT',
     };
+    
+    // Attach native TP/SL/trailing brackets to the order (OANDA best practice)
+    // Note: OANDA allows either stopLossOnFill OR trailingStopLossOnFill, not both
+    if (options.trailingStopDistance) {
+      // Trailing stop takes priority over fixed stop loss
+      order.trailingStopLossOnFill = {
+        distance: options.trailingStopDistance.toFixed(5),
+        timeInForce: 'GTC',
+      };
+    } else if (options.stopLossPrice) {
+      order.stopLossOnFill = {
+        price: options.stopLossPrice.toFixed(5),
+        timeInForce: 'GTC',
+      };
+    }
+    if (options.takeProfitPrice) {
+      order.takeProfitOnFill = {
+        price: options.takeProfitPrice.toFixed(5),
+        timeInForce: 'GTC',
+      };
+    }
+    
+    const orderData = { order };
     
     logger.info('Placing OANDA market order', orderData);
     const response = await this.makeRequest('POST', `/v3/accounts/${this.accountId}/orders`, orderData);
@@ -200,6 +228,8 @@ class OandaAPI extends BaseExchangeAPI {
     return {
       orderId: response.orderFillTransaction?.id || response.orderCreateTransaction?.id,
       status: 'FILLED',
+      stopLossOrderId: response.orderFillTransaction?.tradeOpened?.stopLossOrderID || null,
+      takeProfitOrderId: response.orderFillTransaction?.tradeOpened?.takeProfitOrderID || null,
     };
   }
 
@@ -230,28 +260,21 @@ class OandaAPI extends BaseExchangeAPI {
   }
 
   /**
-   * Place stop loss order
-   * In OANDA, this is done by modifying the trade with stopLossOnFill
-   * For now, we'll create a STOP order
+   * Place stop loss order as a separate STOP order.
+   * Note: Prefer using placeMarketOrder with options.stopLossPrice for native brackets.
+   * @param {string} side - The exit side (SELL to close a long, BUY to close a short)
    */
   async placeStopLoss(symbol, side, quantity, stopPrice) {
-    // Get the trade ID for this instrument
-    const positions = await this.getPositions();
-    const position = positions.find(p => p.symbol === symbol);
-    
-    if (!position) {
-      throw new Error(`No position found for ${symbol} to attach stop loss`);
-    }
-    
-    // OANDA uses negative units for short positions
-    const units = side.toUpperCase() === 'BUY' ? -quantity : quantity;
+    // side is the EXIT side: SELL to close a long, BUY to close a short
+    // OANDA: positive units = BUY, negative units = SELL
+    const units = side.toUpperCase() === 'BUY' ? quantity : -quantity;
     
     const orderData = {
       order: {
         type: 'STOP',
         instrument: symbol,
         units: units.toString(),
-        price: stopPrice.toString(),
+        price: stopPrice.toFixed(5),
         timeInForce: 'GTC',
         positionFill: 'REDUCE_ONLY',
       }
@@ -267,23 +290,25 @@ class OandaAPI extends BaseExchangeAPI {
   }
 
   /**
-   * Place trailing stop loss order (OANDA native)
+   * Place trailing stop loss order (OANDA native).
+   * Prefer using placeMarketOrder with options.trailingStopDistance for native brackets.
    * @param {string} symbol - Trading symbol
-   * @param {string} side - BUY or SELL
+   * @param {string} side - The exit side (SELL to close a long, BUY to close a short)
    * @param {number} quantity - Position size
-   * @param {number} distance - Trailing distance in pips
+   * @param {number} distance - Trailing distance in price units (e.g., 0.0030 for 30 pips on EUR/USD)
    * @param {string} timeInForce - GTC, GTD, or FOK
    */
   async placeTrailingStopLoss(symbol, side, quantity, distance, timeInForce = 'GTC') {
-    // OANDA uses negative units for short positions
-    const units = side.toUpperCase() === 'BUY' ? -quantity : quantity;
+    // side is the EXIT side: SELL to close a long, BUY to close a short
+    // OANDA: positive units = BUY, negative units = SELL
+    const units = side.toUpperCase() === 'BUY' ? quantity : -quantity;
     
     const orderData = {
       order: {
-        type: 'TRAILING_STOP_IF_DONE',
+        type: 'TRAILING_STOP_LOSS',
         instrument: symbol,
         units: units.toString(),
-        distance: distance.toString(),
+        distance: distance.toFixed(5),
         timeInForce: timeInForce,
         positionFill: 'REDUCE_ONLY',
         triggerCondition: 'DEFAULT',
@@ -301,24 +326,21 @@ class OandaAPI extends BaseExchangeAPI {
   }
 
   /**
-   * Place take profit order
+   * Place take profit order as a separate LIMIT order.
+   * Note: Prefer using placeMarketOrder with options.takeProfitPrice for native brackets.
+   * @param {string} side - The exit side (SELL to close a long, BUY to close a short)
    */
   async placeTakeProfit(symbol, side, quantity, takeProfitPrice) {
-    const positions = await this.getPositions();
-    const position = positions.find(p => p.symbol === symbol);
-    
-    if (!position) {
-      throw new Error(`No position found for ${symbol} to attach take profit`);
-    }
-    
-    const units = side.toUpperCase() === 'BUY' ? -quantity : quantity;
+    // side is the EXIT side: SELL to close a long, BUY to close a short
+    // OANDA: positive units = BUY, negative units = SELL
+    const units = side.toUpperCase() === 'BUY' ? quantity : -quantity;
     
     const orderData = {
       order: {
         type: 'LIMIT',
         instrument: symbol,
         units: units.toString(),
-        price: takeProfitPrice.toString(),
+        price: takeProfitPrice.toFixed(5),
         timeInForce: 'GTC',
         positionFill: 'REDUCE_ONLY',
       }

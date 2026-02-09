@@ -579,6 +579,56 @@ class TradeExecutor {
           stopLossOrderId = null; // Will be retried in Step 6
           logger.warn(`Batch SL order failed: ${bracketResult.stopLossOrder.msg}, will retry individually`);
         }
+      } else if (this.api.exchangeName === 'oanda' && finalOrderType === 'market' && (finalStopLoss || finalTakeProfit || finalUseTrailingStop)) {
+        // OANDA native bracket: attach TP/SL/trailing directly to the market order
+        const oandaOptions = {};
+        
+        // Determine if we should use trailing stop instead of fixed SL
+        const useOandaTrailing = finalUseTrailingStop && (finalTrailingStopPercent || finalTrailingStop);
+        
+        if (useOandaTrailing) {
+          // Trailing stop: convert percentage to price distance, or use pip distance directly
+          let trailingDistance;
+          if (finalTrailingStopPercent) {
+            // Convert percentage to price distance (e.g., 0.25% on 1.18 = 0.00295)
+            trailingDistance = entryPrice * (parseFloat(finalTrailingStopPercent) / 100);
+          } else if (finalTrailingStop) {
+            // finalTrailingStop is in pips - convert to price units
+            // Standard forex: 1 pip = 0.0001; JPY pairs: 1 pip = 0.01
+            const isJPY = symbol.includes('JPY');
+            const pipSize = isJPY ? 0.01 : 0.0001;
+            trailingDistance = parseFloat(finalTrailingStop) * pipSize;
+          }
+          oandaOptions.trailingStopDistance = trailingDistance;
+          logger.info(`OANDA native trailing SL: distance=${trailingDistance.toFixed(5)} (${finalTrailingStopPercent ? finalTrailingStopPercent + '%' : finalTrailingStop + ' pips'})`);
+        } else if (finalStopLoss) {
+          const slPrice = calculateStopLoss(side, entryPrice, finalStopLoss);
+          oandaOptions.stopLossPrice = slPrice;
+          logger.info(`OANDA native SL: ${slPrice.toFixed(5)} (${finalStopLoss}%)`);
+        }
+        
+        if (finalTakeProfit) {
+          const tpPrice = calculateTakeProfit(side, entryPrice, finalTakeProfit);
+          oandaOptions.takeProfitPrice = tpPrice;
+          logger.info(`OANDA native TP: ${tpPrice.toFixed(5)} (${finalTakeProfit}%)`);
+        }
+        
+        orderResult = await this.api.placeMarketOrder(symbol, side, roundedQuantity, oandaOptions);
+        
+        // OANDA native brackets are attached to the trade on fill;
+        // mark them as placed so Step 6 doesn't create duplicate orders
+        if (oandaOptions.stopLossPrice || oandaOptions.trailingStopDistance) {
+          stopLossOrderId = orderResult.stopLossOrderId || 'oanda_native_sl';
+          stopLossType = useOandaTrailing ? 'TRAILING' : 'REGULAR';
+        }
+        if (oandaOptions.takeProfitPrice) takeProfitOrderId = orderResult.takeProfitOrderId || 'oanda_native_tp';
+        
+        logger.info('OANDA bracket order placed', {
+          orderId: orderResult.orderId,
+          stopLossOrderId,
+          stopLossType,
+          takeProfitOrderId,
+        });
       } else {
         // Standard order placement (market or limit)
         if (shouldUseFractional && isAlpaca) {
@@ -660,13 +710,22 @@ class TradeExecutor {
               
               if (useTrailing && (finalTrailingStop || finalTrailingStopPercent)) {
                 // Place trailing stop (OANDA uses pips, Alpaca uses $ or %)
-                if (isOanda && finalTrailingStop) {
-                  // OANDA trailing stop (pips)
-                  const trailingDistance = parseFloat(finalTrailingStop);
+                if (isOanda && (finalTrailingStop || finalTrailingStopPercent)) {
+                  // OANDA trailing stop - convert to price distance
+                  let trailingDistance;
+                  if (finalTrailingStopPercent) {
+                    // Percentage to price distance
+                    trailingDistance = entryPrice * (parseFloat(finalTrailingStopPercent) / 100);
+                  } else {
+                    // Pips to price distance (1 pip = 0.0001, JPY = 0.01)
+                    const isJPY = symbol.includes('JPY');
+                    const pipSize = isJPY ? 0.01 : 0.0001;
+                    trailingDistance = parseFloat(finalTrailingStop) * pipSize;
+                  }
                   
                   const stopLossResult = await this.api.placeTrailingStopLoss(
                     symbol,
-                    side,
+                    getOppositeSide(side),
                     roundedQuantity,
                     trailingDistance
                   );
@@ -674,9 +733,11 @@ class TradeExecutor {
                   stopLossOrderId = stopLossResult.orderId;
                   stopLossType = 'TRAILING';
                   
-                  logger.info(`Trailing stop loss placed with ${trailingDistance} pips distance`, {
+                  logger.info(`OANDA trailing stop placed`, {
                     orderId: stopLossOrderId,
-                    distance: trailingDistance,
+                    distance: trailingDistance.toFixed(5),
+                    pips: finalTrailingStop,
+                    percent: finalTrailingStopPercent,
                     type: 'TRAILING',
                   });
                 } else if (isAlpaca && (finalTrailingStop || finalTrailingStopPercent)) {
