@@ -70,7 +70,8 @@ class AsterAPIV3 {
     this.retryDelay = 1000;
 
     // Select EIP-712 domain based on environment (testnet uses chainId 714, production uses 1666)
-    this.eip712Domain = this.environment === 'testnet'
+    // Note: SignalStudio stores as 'sandbox', Sparky uses 'testnet' — accept both
+    this.eip712Domain = (this.environment === 'testnet' || this.environment === 'sandbox')
       ? EIP712_DOMAIN_TESTNET
       : EIP712_DOMAIN_PRODUCTION;
 
