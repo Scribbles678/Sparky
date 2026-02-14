@@ -481,7 +481,7 @@ class ExchangeFactory {
         const asterExtra = credentials.extra || credentials.extra_metadata || {};
         // Detect V3 credentials (wallet-based auth)
         if (asterExtra.api_version === 'v3' || asterExtra.user_address) {
-          const isTestnet = credentials.environment === 'testnet';
+          const isTestnet = credentials.environment === 'testnet' || credentials.environment === 'sandbox';
           logger.info(`🔐 Loading Aster V3 credentials (${credentials.environment || 'production'})`);
           return {
             apiVersion: 'v3',

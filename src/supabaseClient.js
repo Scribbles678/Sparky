@@ -603,13 +603,16 @@ async function getUserExchangeCredentials(userId, exchange, environment = 'produ
  * @private
  */
 async function fetchCredentialsFromDb(userId, exchange, environment = 'production') {
+  // Normalize: Sparky uses 'testnet' but SignalStudio DB stores 'sandbox'
+  const dbEnvironment = environment === 'testnet' ? 'sandbox' : environment;
+
   try {
     const { data, error } = await supabase
       .from('bot_credentials')
       .select('*')
       .eq('user_id', userId)
       .eq('exchange', exchange)
-      .eq('environment', environment)
+      .eq('environment', dbEnvironment)
       .maybeSingle();
 
     if (error) {
@@ -664,12 +667,15 @@ async function getExchangeCredentialsByEnvironment(exchange, environment) {
     return null;
   }
 
+  // Normalize: Sparky uses 'testnet' but SignalStudio DB stores 'sandbox'
+  const dbEnvironment = environment === 'testnet' ? 'sandbox' : environment;
+
   try {
     const { data, error } = await supabase
       .from('bot_credentials')
       .select('*')
       .eq('exchange', exchange.toLowerCase())
-      .eq('environment', environment)
+      .eq('environment', dbEnvironment)
       .limit(1)
       .maybeSingle();
 
