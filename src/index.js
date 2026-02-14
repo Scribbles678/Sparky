@@ -486,35 +486,43 @@ app.get('/positions', (req, res) => {
 /**
  * Full exchange positions endpoint
  * Returns raw position data from the exchange API (V3-compatible)
- * Used by SignalStudio's trade sync endpoint
+ * Used by SignalStudio's trade sync endpoint and Testnet Execution Router
+ * 
+ * Supports multiple exchanges: aster (default), oanda, tradier
+ * Query params: environment, userId, exchange (defaults to 'aster')
  */
 app.get('/positions/exchange', async (req, res) => {
   try {
     const environment = req.query.environment || 'production';
-    let api = asterApi;
+    const exchangeName = (req.query.exchange || 'aster').toLowerCase();
+    const userId = req.query.userId || null;
+    let api = null;
 
-    // For testnet requests, dynamically create a testnet API instance
-    if (environment === 'testnet') {
-      logger.info('📡 Fetching testnet positions - creating testnet API instance...');
-      const userId = req.query.userId || null;
+    // For production aster, use the pre-initialized instance
+    if (exchangeName === 'aster' && environment === 'production') {
+      api = asterApi;
+    }
+    
+    // For testnet or non-aster exchanges, dynamically create an API instance
+    if (!api) {
       if (userId) {
-        api = await ExchangeFactory.createExchangeForUser(userId, 'aster', 'testnet');
+        logger.info(`📡 Fetching ${exchangeName} ${environment} positions for user ${userId}...`);
+        api = await ExchangeFactory.createExchangeForUser(userId, exchangeName, environment);
       } else {
-        // Load testnet credentials without requiring a specific userId
+        // Load credentials without requiring a specific userId
         const { getExchangeCredentialsByEnvironment } = require('./supabaseClient');
-        const testnetCreds = await getExchangeCredentialsByEnvironment('aster', 'testnet');
-        if (testnetCreds) {
-          const testnetConfig = ExchangeFactory.mapCredentialsToConfig('aster', testnetCreds);
-          if (testnetConfig) {
-            api = ExchangeFactory.createExchange('aster', testnetConfig);
+        const creds = await getExchangeCredentialsByEnvironment(exchangeName, environment);
+        if (creds) {
+          const config = ExchangeFactory.mapCredentialsToConfig(exchangeName, creds);
+          if (config) {
+            api = ExchangeFactory.createExchange(exchangeName, config);
           }
         }
       }
-      if (!api) {
-        return res.status(503).json({ success: false, error: 'Testnet exchange API not available - no testnet credentials found' });
-      }
-    } else if (!api) {
-      return res.status(503).json({ success: false, error: 'Exchange API not initialized' });
+    }
+    
+    if (!api) {
+      return res.status(503).json({ success: false, error: `${exchangeName} ${environment} API not available - no credentials found` });
     }
 
     const rawPositions = await api.getPositions();
@@ -549,7 +557,7 @@ app.get('/positions/exchange', async (req, res) => {
 
     res.json({
       success: true,
-      exchange: 'aster',
+      exchange: exchangeName,
       environment,
       apiVersion: api.apiVersion || 'v1',
       count: positions.length,
@@ -642,59 +650,69 @@ app.post('/positions/close', async (req, res) => {
 /**
  * Get recent fills/trades from the exchange (supports testnet)
  * Returns recent trade history with order IDs, timestamps, and fees
+ * 
+ * Supports multiple exchanges: aster (default), oanda, tradier
+ * Query params: environment, userId, exchange (defaults to 'aster'), symbol, limit
  */
 app.get('/positions/exchange/fills', async (req, res) => {
   try {
     const environment = req.query.environment || 'production';
+    const exchangeName = (req.query.exchange || 'aster').toLowerCase();
     const symbol = req.query.symbol || null;
     const limit = parseInt(req.query.limit) || 50;
-    let api = asterApi;
+    const userId = req.query.userId || null;
+    let api = null;
     
-    if (environment === 'testnet') {
-      const userId = req.query.userId || null;
+    // For production aster, use the pre-initialized instance
+    if (exchangeName === 'aster' && environment === 'production') {
+      api = asterApi;
+    }
+    
+    // For testnet or non-aster exchanges, dynamically create an API instance
+    if (!api) {
       if (userId) {
-        api = await ExchangeFactory.createExchangeForUser(userId, 'aster', 'testnet');
+        api = await ExchangeFactory.createExchangeForUser(userId, exchangeName, environment);
       } else {
         const { getExchangeCredentialsByEnvironment } = require('./supabaseClient');
-        const testnetCreds = await getExchangeCredentialsByEnvironment('aster', 'testnet');
-        if (testnetCreds) {
-          const testnetConfig = ExchangeFactory.mapCredentialsToConfig('aster', testnetCreds);
-          if (testnetConfig) {
-            api = ExchangeFactory.createExchange('aster', testnetConfig);
+        const creds = await getExchangeCredentialsByEnvironment(exchangeName, environment);
+        if (creds) {
+          const config = ExchangeFactory.mapCredentialsToConfig(exchangeName, creds);
+          if (config) {
+            api = ExchangeFactory.createExchange(exchangeName, config);
           }
         }
       }
     }
     
     if (!api) {
-      return res.status(503).json({ success: false, error: 'Exchange API not available' });
+      return res.status(503).json({ success: false, error: `${exchangeName} ${environment} API not available` });
     }
     
-    // Fetch recent trades
+    // Fetch recent trades -- use positional args (symbol, limit) not an options object
     let trades = [];
     if (api.getTradeHistory) {
-      trades = await api.getTradeHistory(symbol ? { symbol, limit } : { limit });
+      trades = await api.getTradeHistory(symbol || undefined, limit);
     } else if (api.getUserTrades) {
-      trades = await api.getUserTrades(symbol ? { symbol, limit } : { limit });
+      trades = await api.getUserTrades(symbol || undefined, limit);
     }
     
-    // Normalize trade data
+    // Normalize trade data to a common format across all exchanges
     const fills = (trades || []).map(t => ({
-      orderId: t.orderId,
-      symbol: t.symbol,
+      orderId: t.orderId || t.id,
+      symbol: t.symbol || t.instrument,
       side: t.side,
-      quantity: parseFloat(t.qty || t.quantity || 0),
+      quantity: parseFloat(t.qty || t.quantity || t.units || 0),
       price: parseFloat(t.price || 0),
       commission: parseFloat(t.commission || t.fee || 0),
-      commissionAsset: t.commissionAsset || t.feeAsset || 'USDT',
+      commissionAsset: t.commissionAsset || t.feeAsset || 'USD',
       time: t.time || t.timestamp,
-      realizedPnl: parseFloat(t.realizedPnl || t.realizedProfit || 0),
+      realizedPnl: parseFloat(t.realizedPnl || t.realizedProfit || t.pl || 0),
       isMaker: t.isMaker || false,
     }));
     
     res.json({
       success: true,
-      exchange: 'aster',
+      exchange: exchangeName,
       environment,
       count: fills.length,
       fills,

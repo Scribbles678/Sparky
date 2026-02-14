@@ -353,6 +353,77 @@ class TradierAPI extends BaseExchangeAPI {
   async getMarketCalendar() {
     return this.makeRequest('GET', '/markets/calendar');
   }
+
+  // ==================== Trade History Methods ====================
+
+  /**
+   * Get recent trade history (fills) from Tradier.
+   * Uses the account history endpoint filtered to trade events.
+   * Returns normalized format matching the common fills interface.
+   * 
+   * @param {string} [symbol] - Optional symbol to filter by (e.g., "AAPL")
+   * @param {number} [limit=50] - Maximum number of fills to return
+   * @returns {Promise<Array>} Normalized trade history
+   */
+  async getTradeHistory(symbol, limit = 50) {
+    try {
+      // Fetch account history (includes trades, adjustments, etc.)
+      const response = await this.makeRequest('GET', `/accounts/${this.accountId}/history`);
+      
+      if (!response.history || !response.history.event) {
+        return [];
+      }
+      
+      // Tradier returns single event as object, multiple as array
+      let events = Array.isArray(response.history.event) 
+        ? response.history.event 
+        : [response.history.event];
+      
+      // Filter to trade events only
+      events = events.filter(e => e.type === 'trade');
+      
+      // Filter by symbol if specified
+      if (symbol) {
+        events = events.filter(e => {
+          const trade = e.trade || {};
+          return trade.symbol === symbol;
+        });
+      }
+      
+      // Take the most recent N fills
+      events = events.slice(-limit).reverse();
+      
+      // Normalize to common format
+      return events.map(e => {
+        const trade = e.trade || {};
+        const qty = parseFloat(trade.quantity || 0);
+        const price = parseFloat(trade.price || 0);
+        const commission = parseFloat(trade.commission || 0);
+        
+        return {
+          orderId: trade.order_id || e.id,
+          id: e.id,
+          symbol: trade.symbol,
+          side: (trade.trade_type || '').toUpperCase().includes('BUY') ? 'BUY' : 'SELL',
+          qty: qty.toString(),
+          quantity: qty,
+          price: price,
+          commission: Math.abs(commission),
+          fee: Math.abs(commission),
+          time: e.date || trade.date,
+          timestamp: e.date || trade.date,
+          // Tradier doesn't include realized P&L per trade in history
+          // We calculate it from the cost basis if available
+          realizedPnl: parseFloat(trade.gainloss || 0),
+          realizedProfit: parseFloat(trade.gainloss || 0),
+          description: trade.description || '',
+        };
+      });
+    } catch (error) {
+      logger.logError('Tradier getTradeHistory failed', error);
+      return [];
+    }
+  }
 }
 
 module.exports = TradierAPI;

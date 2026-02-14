@@ -405,6 +405,92 @@ class OandaAPI extends BaseExchangeAPI {
   async getOrder(symbol, orderId) {
     return this.makeRequest('GET', `/v3/accounts/${this.accountId}/orders/${orderId}`);
   }
+
+  // ==================== Trade History Methods ====================
+
+  /**
+   * Get recent trade history (fills) from OANDA.
+   * Uses the transactions endpoint filtered to ORDER_FILL type.
+   * Returns normalized format matching the common fills interface.
+   * 
+   * @param {string} [symbol] - Optional instrument to filter by (e.g., "EUR_USD")
+   * @param {number} [limit=50] - Maximum number of fills to return
+   * @returns {Promise<Array>} Normalized trade history
+   */
+  async getTradeHistory(symbol, limit = 50) {
+    try {
+      // Fetch recent transactions of type ORDER_FILL
+      let endpoint = `/v3/accounts/${this.accountId}/transactions?type=ORDER_FILL&count=${Math.min(limit, 1000)}`;
+      
+      const response = await this.makeRequest('GET', endpoint);
+      
+      // The transactions endpoint returns transaction IDs; we need to fetch details
+      // Use the transaction range endpoint for efficiency
+      const transactionIds = response.pages || [];
+      
+      // If we got transaction IDs from pages, fetch the actual transactions
+      // Otherwise try the sinceID approach
+      let transactions = [];
+      
+      if (response.transactions) {
+        // Direct transactions returned (older OANDA API behavior)
+        transactions = response.transactions;
+      } else if (transactionIds.length > 0) {
+        // Fetch transaction details from the last page URL
+        const lastPageUrl = transactionIds[transactionIds.length - 1];
+        if (lastPageUrl) {
+          // Extract the path from the full URL
+          const urlPath = lastPageUrl.replace(this.apiUrl, '');
+          const txResponse = await this.makeRequest('GET', urlPath);
+          transactions = txResponse.transactions || [];
+        }
+      }
+      
+      // If we still don't have transactions, try the alternative endpoint
+      if (transactions.length === 0) {
+        const altResponse = await this.makeRequest('GET', 
+          `/v3/accounts/${this.accountId}/transactions?count=${Math.min(limit * 2, 500)}`
+        );
+        transactions = (altResponse.transactions || []).filter(t => t.type === 'ORDER_FILL');
+      }
+      
+      // Filter by symbol if specified
+      if (symbol) {
+        transactions = transactions.filter(t => {
+          const instrument = t.instrument || '';
+          return instrument === symbol || instrument === symbol.replace('_', '/');
+        });
+      }
+      
+      // Take only the most recent N fills
+      transactions = transactions.slice(-limit).reverse();
+      
+      // Normalize to common format
+      return transactions.map(t => ({
+        orderId: t.orderID || t.id,
+        id: t.id,
+        symbol: t.instrument,
+        instrument: t.instrument,
+        side: parseFloat(t.units || 0) > 0 ? 'BUY' : 'SELL',
+        qty: Math.abs(parseFloat(t.units || 0)).toString(),
+        quantity: Math.abs(parseFloat(t.units || 0)),
+        units: t.units,
+        price: parseFloat(t.price || 0),
+        commission: Math.abs(parseFloat(t.commission || 0)),
+        fee: Math.abs(parseFloat(t.commission || 0)),
+        time: t.time,
+        timestamp: t.time,
+        realizedPnl: parseFloat(t.pl || 0),
+        pl: parseFloat(t.pl || 0),
+        realizedProfit: parseFloat(t.pl || 0),
+        financing: parseFloat(t.financing || 0),
+        accountBalance: parseFloat(t.accountBalance || 0),
+      }));
+    } catch (error) {
+      logger.logError('OANDA getTradeHistory failed', error);
+      return [];
+    }
+  }
 }
 
 module.exports = OandaAPI;
