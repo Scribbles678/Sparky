@@ -2,16 +2,17 @@
  * Position Price Updater Service
  * 
  * Supports two modes:
- * 1. WebSocket-first (V3): Real-time price updates via Aster WebSocket streams
- *    - Subscribes to miniTicker for instant price changes
- *    - Subscribes to ACCOUNT_UPDATE for instant position/balance changes
+ * 1. WebSocket-first: Real-time price updates via any EventEmitter stream source
+ *    (AsterWebSocket, CCXTProExchangeAPI, or any compatible emitter)
+ *    - Subscribes to ticker for instant price changes
+ *    - Subscribes to accountUpdate for instant position/balance changes
  *    - REST reconciliation every 5 minutes as safety net
  * 
- * 2. REST polling (V1/V2 legacy): Polls REST API every 30 seconds
+ * 2. REST polling (legacy): Polls REST API every 30 seconds
  *    - Original behavior, backward compatible
  * 
- * The mode is automatically detected based on whether an AsterWebSocket
- * instance is provided.
+ * The mode is automatically detected based on whether a stream source
+ * is provided via setStreamSource() or setWebSocket().
  */
 
 const logger = require('./utils/logger');
@@ -28,8 +29,8 @@ class PositionUpdater {
     this.syncIntervalCount = 10; // Sync with exchange every 10 intervals (5 minutes)
     this.currentIntervalCount = 0;
 
-    // WebSocket mode
-    this.wsClient = null;           // AsterWebSocket instance (if V3)
+    // WebSocket / streaming mode
+    this.streamSource = null;       // EventEmitter stream source (AsterWebSocket, CCXTProExchangeAPI, etc.)
     this.wsMode = false;            // true = WebSocket-first, false = REST polling
     this.latestPrices = new Map();  // symbol → { price, timestamp } from WebSocket
     this.wsReconcileMs = 300000;    // REST reconciliation interval in WS mode (5 min)
@@ -37,14 +38,24 @@ class PositionUpdater {
   }
 
   /**
-   * Attach an AsterWebSocket instance for real-time updates
-   * Call this BEFORE start() to enable WebSocket mode
+   * Attach any EventEmitter-compatible stream source for real-time updates.
+   * The source must emit: 'ticker', 'accountUpdate', 'orderFilled'
+   * Works with AsterWebSocket, CCXTProExchangeAPI, or any compatible emitter.
+   * Call this BEFORE start() to enable WebSocket/streaming mode.
+   * @param {EventEmitter} source - Stream source instance
+   */
+  setStreamSource(source) {
+    this.streamSource = source;
+    this.wsMode = true;
+    logger.info('Position updater: streaming mode enabled');
+  }
+
+  /**
+   * Backward-compatible alias for setStreamSource()
    * @param {object} wsClient - AsterWebSocket instance
    */
   setWebSocket(wsClient) {
-    this.wsClient = wsClient;
-    this.wsMode = true;
-    logger.info('📡 Position updater: WebSocket mode enabled');
+    this.setStreamSource(wsClient);
   }
 
   /**
@@ -56,7 +67,7 @@ class PositionUpdater {
       return;
     }
 
-    if (this.wsMode && this.wsClient) {
+    if (this.wsMode && this.streamSource) {
       this._startWebSocketMode();
     } else {
       this._startRestMode();
@@ -68,26 +79,26 @@ class PositionUpdater {
    * @private
    */
   _startWebSocketMode() {
-    logger.info('🚀 Starting position updater in WebSocket mode (real-time)');
+    logger.info('Starting position updater in streaming mode (real-time)');
 
     // Subscribe to ticker events for price updates
-    this.wsClient.on('ticker', (data) => {
+    this.streamSource.on('ticker', (data) => {
       this._handleWsTicker(data);
     });
 
     // Subscribe to user account updates for instant position changes
-    this.wsClient.on('accountUpdate', (data) => {
+    this.streamSource.on('accountUpdate', (data) => {
       this._handleWsAccountUpdate(data);
     });
 
     // Subscribe to order fills for immediate trade detection
-    this.wsClient.on('orderFilled', (data) => {
+    this.streamSource.on('orderFilled', (data) => {
       this._handleWsOrderFilled(data);
     });
 
-    // Subscribe to margin calls
-    this.wsClient.on('marginCall', (data) => {
-      logger.warn(`⚠️ MARGIN CALL: ${data.positions?.length || 0} position(s) at risk`);
+    // Subscribe to margin calls (if supported by the stream source)
+    this.streamSource.on('marginCall', (data) => {
+      logger.warn(`MARGIN CALL: ${data.positions?.length || 0} position(s) at risk`);
       for (const pos of data.positions || []) {
         logger.warn(`   ${pos.symbol}: unrealized PnL $${pos.unrealizedPnl}, maintenance margin $${pos.maintenanceMarginRequired}`);
       }
@@ -128,15 +139,15 @@ class PositionUpdater {
    * @private
    */
   _subscribeTrackedSymbols() {
-    if (!this.wsClient) return;
+    if (!this.streamSource || !this.streamSource.subscribeTickers) return;
 
     const positions = this.tracker.getAllPositions();
     if (positions.length > 0) {
       const symbols = [...new Set(positions.map(p => p.symbol))];
-      this.wsClient.subscribeTickers(symbols).catch(err => {
+      this.streamSource.subscribeTickers(symbols).catch(err => {
         logger.logError('Failed to subscribe tracked symbols to ticker', err);
       });
-      logger.info(`📡 Subscribed ${symbols.length} tracked symbol(s) to WebSocket ticker`);
+      logger.info(`Subscribed ${symbols.length} tracked symbol(s) to streaming ticker`);
     }
   }
 
@@ -203,8 +214,8 @@ class PositionUpdater {
           // New position detected via WS
           logger.info(`📡 WS detected new position: ${pos.symbol} (${positionAmt > 0 ? 'LONG' : 'SHORT'} ${Math.abs(positionAmt)} @ $${pos.entryPrice})`);
           // Subscribe to its ticker
-          if (this.wsClient) {
-            this.wsClient.subscribeTickers([pos.symbol]).catch(() => {});
+          if (this.streamSource && this.streamSource.subscribeTickers) {
+            this.streamSource.subscribeTickers([pos.symbol]).catch(() => {});
           }
         }
       }
@@ -226,8 +237,8 @@ class PositionUpdater {
     logger.info(`✅ Order filled via WS: ${data.symbol} ${data.side} ${data.cumulativeFilledQty} @ $${data.averagePrice} (realized PnL: $${data.realizedProfit})`);
     
     // Subscribe to the symbol's ticker if not already
-    if (this.wsClient && !this.latestPrices.has(data.symbol)) {
-      this.wsClient.subscribeTickers([data.symbol]).catch(() => {});
+    if (this.streamSource && this.streamSource.subscribeTickers && !this.latestPrices.has(data.symbol)) {
+      this.streamSource.subscribeTickers([data.symbol]).catch(() => {});
     }
   }
 
@@ -269,14 +280,19 @@ class PositionUpdater {
       clearInterval(this.wsReconcileTimer);
       this.wsReconcileTimer = null;
     }
-    // Remove WebSocket listeners
-    if (this.wsClient) {
-      this.wsClient.removeAllListeners('ticker');
-      this.wsClient.removeAllListeners('accountUpdate');
-      this.wsClient.removeAllListeners('orderFilled');
-      this.wsClient.removeAllListeners('marginCall');
+    // Remove stream source listeners and stop streams
+    if (this.streamSource) {
+      this.streamSource.removeAllListeners('ticker');
+      this.streamSource.removeAllListeners('accountUpdate');
+      this.streamSource.removeAllListeners('orderFilled');
+      this.streamSource.removeAllListeners('marginCall');
+      if (this.streamSource.stopAllStreams) {
+        this.streamSource.stopAllStreams().catch(err => {
+          logger.logError('Error stopping stream source', err);
+        });
+      }
     }
-    logger.info(`Position price updater stopped (mode: ${this.wsMode ? 'WebSocket' : 'REST'})`);
+    logger.info(`Position price updater stopped (mode: ${this.wsMode ? 'streaming' : 'REST'})`);
   }
 
   /**

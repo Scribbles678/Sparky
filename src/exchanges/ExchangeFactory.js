@@ -14,6 +14,7 @@ const OandaAPI = require('./oandaApi');
 const TradierAPI = require('./tradierApi');
 const TradierOptionsAPI = require('./tradierOptionsApi');
 const CCXTExchangeAPI = require('./ccxtExchangeApi');
+const CCXTProExchangeAPI = require('./ccxtProExchangeApi');
 const KalshiAPI = require('./kalshiApi');
 const AlpacaAPI = require('./alpacaApi');
 const CapitalAPI = require('./capitalApi');
@@ -218,6 +219,23 @@ class ExchangeFactory {
       //     config.accountIdKey || null,
       //     config.environment || 'production'
       //   );
+
+      case 'apex': {
+        if (!config.apiKey) {
+          throw new Error('Apex DEX requires apiKey, secret, and passphrase');
+        }
+        const api = new CCXTProExchangeAPI('apex', {
+          apiKey: config.apiKey,
+          secret: config.apiSecret || config.secret,
+          password: config.passphrase || config.password,
+          environment: config.environment === 'sandbox' || config.environment === 'testnet'
+            ? 'sandbox' : 'production',
+          sandbox: config.environment === 'sandbox' || config.environment === 'testnet',
+          options: config.options || {},
+        });
+        logger.info(`Apex DEX API created via CCXT Pro (WS-capable, ${config.environment || 'production'})`);
+        return api;
+      }
       
       default:
         // Try CCXT for any other exchange (apex, binance, coinbase, etc.)
@@ -410,7 +428,7 @@ class ExchangeFactory {
    */
   static getSupportedExchanges() {
     // Custom exchanges + CCXT exchanges (100+)
-    const customExchanges = ['aster', 'oanda', 'tradier', 'tradier_options', 'kalshi', 'alpaca', 'capital', 'robinhood', 'trading212', 'lime', 'public', 'webull', 'tradestation'];
+    const customExchanges = ['aster', 'apex', 'oanda', 'tradier', 'tradier_options', 'kalshi', 'alpaca', 'capital', 'robinhood', 'trading212', 'lime', 'public', 'webull', 'tradestation'];
     
     // Get CCXT exchanges (dynamically)
     try {
@@ -642,14 +660,26 @@ class ExchangeFactory {
       //     accountIdKey: extra.accountIdKey || null,
       //     environment: credentials.environment || 'production',
       //   };
+
+      case 'apex': {
+        const apexExtra = credentials.extra || credentials.extra_metadata || {};
+        return {
+          apiKey: credentials.apiKey,
+          apiSecret: credentials.apiSecret,
+          passphrase: credentials.passphrase || apexExtra.passphrase,
+          environment: credentials.environment || 'production',
+          sandbox: credentials.environment === 'sandbox' || credentials.environment === 'testnet',
+          options: apexExtra.options || {},
+        };
+      }
       
       default:
-        // Try CCXT exchange (apex, binance, coinbase, etc.)
+        // Try CCXT exchange (binance, coinbase, etc.)
         // CCXT uses standard apiKey/apiSecret format
         return {
           apiKey: credentials.apiKey,
           apiSecret: credentials.apiSecret,
-          passphrase: credentials.passphrase || credentials.extra?.passphrase, // Some exchanges need this
+          passphrase: credentials.passphrase || credentials.extra?.passphrase,
           environment: credentials.environment || 'production',
           sandbox: credentials.environment === 'sandbox',
           options: credentials.extra?.options || {},

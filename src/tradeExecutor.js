@@ -44,20 +44,20 @@ class TradeExecutor {
   getAssetClass() {
     const exchangeAssetMap = {
       'aster': 'crypto',
+      'apex': 'crypto',
       'oanda': 'forex',
       'tradier': 'stocks',
       'tradier_options': 'options',
       'tastytrade': 'futures',
       'kalshi': 'prediction',
       'alpaca': 'stocks',
-      'capital': 'crypto', // Capital.com supports CFDs, stocks, forex, crypto, commodities
-      'robinhood': 'crypto', // Robinhood Crypto is crypto-only
-      'trading212': 'stocks', // Trading212 supports stocks and ETFs (Invest and Stocks ISA accounts)
-      'lime': 'stocks', // Lime supports stocks and options (US equities)
-      'public': 'stocks', // Public.com supports stocks and options
-      'webull': 'stocks', // Webull supports stocks and ETFs (US market)
-      'tradestation': 'stocks', // TradeStation supports stocks, options, and futures
-      // 'etrade': 'stocks', // Disabled - OAuth 1.0 with daily expiration is too burdensome
+      'capital': 'crypto',
+      'robinhood': 'crypto',
+      'trading212': 'stocks',
+      'lime': 'stocks',
+      'public': 'stocks',
+      'webull': 'stocks',
+      'tradestation': 'stocks',
     };
     return exchangeAssetMap[this.exchange] || 'crypto';
   }
@@ -579,6 +579,49 @@ class TradeExecutor {
           stopLossOrderId = null; // Will be retried in Step 6
           logger.warn(`Batch SL order failed: ${bracketResult.stopLossOrder.msg}, will retry individually`);
         }
+      } else if (this.api.exchangeId === 'apex' && this.api.placeBracketOrder && finalStopLoss && finalTakeProfit) {
+        // Apex DEX bracket order via CCXT Pro: entry + TP + SL in one call
+        const stopPrice = calculateStopLoss(side, entryPrice, finalStopLoss);
+        const tpPrice = calculateTakeProfit(side, entryPrice, finalTakeProfit);
+        const roundedStopPrice = roundPrice(stopPrice);
+        const roundedTpPrice = roundPrice(tpPrice);
+
+        const apexOptions = {
+          takeProfitPrice: roundedTpPrice,
+          stopLossPrice: roundedStopPrice,
+        };
+        if (finalUseTrailingStop && (finalTrailingStopPercent || finalTrailingStop)) {
+          apexOptions.trailingPercent = finalTrailingStopPercent || finalTrailingStop;
+        }
+
+        logger.info('Using Apex bracket order via CCXT Pro (entry + TP + SL)', {
+          takeProfit: roundedTpPrice,
+          stopLoss: roundedStopPrice,
+          trailing: !!apexOptions.trailingPercent,
+        });
+
+        const bracketResult = await this.api.placeBracketOrder(
+          symbol, side, finalOrderType, roundedQuantity, 
+          finalOrderType === 'limit' ? entryPrice : undefined,
+          apexOptions
+        );
+
+        orderResult = bracketResult.entryOrder || bracketResult;
+
+        if (bracketResult.takeProfitOrder) {
+          takeProfitOrderId = bracketResult.takeProfitOrder.orderId || 'apex_tp';
+        }
+        if (bracketResult.stopLossOrder) {
+          stopLossOrderId = bracketResult.stopLossOrder.orderId || 'apex_sl';
+          stopLossType = apexOptions.trailingPercent ? 'TRAILING' : 'REGULAR';
+        }
+
+        logger.info('Apex bracket order placed', {
+          entryOrderId: orderResult?.orderId,
+          takeProfitOrderId,
+          stopLossOrderId,
+          stopLossType,
+        });
       } else if (this.api.exchangeName === 'oanda' && finalOrderType === 'market' && (finalStopLoss || finalTakeProfit || finalUseTrailingStop)) {
         // OANDA native bracket: attach TP/SL/trailing directly to the market order
         const oandaOptions = {};
@@ -706,7 +749,8 @@ class TradeExecutor {
               // Check if we want trailing stop (OANDA, Alpaca, or Aster)
               const isOanda = this.api.exchangeName === 'oanda';
               const isAster = this.api.exchangeName === 'aster';
-              const useTrailing = (isOanda || isAlpaca || isAster) && (finalUseTrailingStop || finalTrailingStop || finalTrailingStopPercent);
+              const isApex = this.api.exchangeId === 'apex';
+              const useTrailing = (isOanda || isAlpaca || isAster || isApex) && (finalUseTrailingStop || finalTrailingStop || finalTrailingStopPercent);
               
               if (useTrailing && (finalTrailingStop || finalTrailingStopPercent)) {
                 // Place trailing stop (OANDA uses pips, Alpaca uses $ or %)
@@ -778,6 +822,25 @@ class TradeExecutor {
                   stopLossType = 'TRAILING';
                   
                   logger.info(`Aster trailing stop placed`, {
+                    orderId: stopLossOrderId,
+                    callbackRate,
+                    type: 'TRAILING',
+                  });
+                } else if (isApex && (finalTrailingStop || finalTrailingStopPercent)) {
+                  // Apex trailing stop via CCXT Pro
+                  const callbackRate = finalTrailingStopPercent || finalTrailingStop;
+
+                  const stopLossResult = await this.api.placeTrailingStop(
+                    symbol,
+                    getOppositeSide(side),
+                    roundedQuantity,
+                    callbackRate
+                  );
+
+                  stopLossOrderId = stopLossResult.orderId;
+                  stopLossType = 'TRAILING';
+
+                  logger.info('Apex trailing stop placed', {
                     orderId: stopLossOrderId,
                     callbackRate,
                     type: 'TRAILING',
@@ -1069,16 +1132,12 @@ class TradeExecutor {
       // Cancel stop loss and take profit orders if they exist
       if (trackedPosition) {
         const isAsterExchange = this.api.exchangeName === 'aster';
+        const isApexExchange = this.api.exchangeId === 'apex';
         
-        if (isAsterExchange && this.api.cancelAllOrders) {
-          // For Aster: cancel ALL open orders for this symbol at once.
-          // This is more robust than individual cancels because:
-          // 1. One side (TP or SL) may have already filled, causing individual cancel to fail
-          // 2. Batch-placed orders may use different IDs than tracked
-          // 3. Catches any orphaned orders from previous trades
+        if ((isAsterExchange || isApexExchange) && this.api.cancelAllOrders) {
           try {
             await this.api.cancelAllOrders(symbol);
-            logger.info(`Cancelled all open orders for ${symbol} (Aster cleanup)`);
+            logger.info(`Cancelled all open orders for ${symbol} (${isApexExchange ? 'Apex' : 'Aster'} cleanup)`);
           } catch (error) {
             logger.logError('Failed to cancel all orders', error, { symbol });
           }

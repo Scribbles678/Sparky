@@ -22,7 +22,7 @@
     "@supabase/supabase-js": "^2.75.1",
     "axios": "^1.6.0",
     "base64-js": "^1.5.1",
-    "ccxt": "^4.5.26",
+    "ccxt": "^4.5.38",
     "dotenv": "^16.3.1",
     "ethers": "^6.16.0",
     "express": "^4.18.2",

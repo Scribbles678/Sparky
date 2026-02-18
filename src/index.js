@@ -13,6 +13,7 @@ const PositionUpdater = require('./positionUpdater');
 const strategyRoutes = require('./api/strategies');
 const settingsService = require('./settings/settingsService');
 const ExchangeFactory = require('./exchanges/ExchangeFactory');
+const CCXTProExchangeAPI = require('./exchanges/ccxtProExchangeApi');
 const { initRedis, isRedisAvailable } = require('./utils/redis');
 const {
   testConnection,
@@ -160,6 +161,10 @@ let asterWs = null;  // Aster V3 WebSocket client
 let microstructureCollector = null;  // Order book + trade flow collector for ML
 let primaryPositionUpdater = null;
 let server;
+
+// Connection pool for CCXT Pro streaming instances (per user+exchange)
+// Avoids reconnecting WebSocket on every webhook
+const streamingPool = new Map(); // key: `${userId}:${exchange}` → CCXTProExchangeAPI instance
 
 // ==================== Express App Setup ====================
 
@@ -1043,9 +1048,34 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
         });
       }
       
+      // If this is a CCXT Pro exchange, set up streaming via connection pool
+      if (exchangeApi instanceof CCXTProExchangeAPI) {
+        const poolKey = `${userId}:${exchange}`;
+        if (!streamingPool.has(poolKey)) {
+          streamingPool.set(poolKey, exchangeApi);
+          exchangeApi.startStreaming().catch(err => {
+            logger.logError(`Failed to start ${exchange} streaming for user ${userId}`, err);
+          });
+          logger.info(`CCXT Pro streaming started for ${exchange} (user ${userId})`);
+        } else {
+          // Reuse existing streaming instance for the executor
+          exchangeApi = streamingPool.get(poolKey);
+        }
+
+        // Create a per-user position updater if one doesn't exist yet
+        const updaterKey = `${userId}:${exchange}`;
+        if (!positionUpdaters[updaterKey]) {
+          const userUpdater = new PositionUpdater(exchangeApi, positionTracker, config);
+          userUpdater.setStreamSource(exchangeApi);
+          userUpdater.start();
+          positionUpdaters[updaterKey] = userUpdater;
+          logger.info(`Position updater (streaming) started for ${exchange} user ${userId}`);
+        }
+      }
+
       // Create a temporary trade executor with user's exchange API
       executor = new TradeExecutor(exchangeApi, positionTracker, config, exchange);
-      logger.info(`✅ Created ${exchange} executor for user ${userId}`);
+      logger.info(`Created ${exchange} executor for user ${userId}`);
     } else {
       // LEGACY: Fall back to pre-initialized executors (for backward compatibility)
       logger.warn('⚠️ No userId provided - using legacy pre-initialized executor');
@@ -1372,6 +1402,17 @@ const shutdown = async () => {
       logger.warn('Failed to shutdown Aster WebSocket', error);
     }
   }
+
+  // Stop CCXT Pro streaming pool instances
+  for (const [key, api] of streamingPool) {
+    try {
+      await api.stopAllStreams();
+      logger.info(`Stopped streaming for ${key}`);
+    } catch (error) {
+      logger.warn(`Failed to stop streaming for ${key}`, error);
+    }
+  }
+  streamingPool.clear();
 
   // Stop position updaters
   Object.values(positionUpdaters).forEach((updater) => {
