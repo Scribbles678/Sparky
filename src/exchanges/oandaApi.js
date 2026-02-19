@@ -15,8 +15,8 @@ class OandaAPI extends BaseExchangeAPI {
       ? 'https://api-fxtrade.oanda.com'
       : 'https://api-fxpractice.oanda.com';
     
-    this.maxRetries = 3;
-    this.retryDelay = 1000;
+    this.maxRetries = 2;
+    this.retryDelay = 500;
   }
 
   /**
@@ -137,13 +137,28 @@ class OandaAPI extends BaseExchangeAPI {
   }
 
   /**
-   * Get position for specific symbol
+   * Get position for specific symbol using per-instrument endpoint
    */
   async getPosition(symbol) {
-    const positions = await this.getPositions();
-    const position = positions.find(p => p.symbol === symbol && parseFloat(p.positionAmt) !== 0);
-    
-    return position || null;
+    try {
+      const response = await this.makeRequest('GET', `/v3/accounts/${this.accountId}/positions/${symbol}`);
+      const pos = response.position;
+      if (!pos) return null;
+      const longUnits = parseFloat(pos.long?.units || '0');
+      const shortUnits = parseFloat(pos.short?.units || '0');
+      const units = longUnits + shortUnits;
+      if (units === 0) return null;
+      return {
+        symbol: pos.instrument,
+        positionAmt: units.toString(),
+        entryPrice: units > 0 ? pos.long.averagePrice : pos.short.averagePrice,
+        markPrice: null,
+        unRealizedProfit: parseFloat(pos.unrealizedPL || '0'),
+      };
+    } catch (error) {
+      if (error.response && error.response.status === 404) return null;
+      throw error;
+    }
   }
 
   /**

@@ -418,33 +418,37 @@ class TradeExecutor {
         }
       }
 
-      // Step 2: Check available margin (optional, for safety)
-      const availableMargin = await this.api.getAvailableMargin();
-      
+      // Steps 2+4: Fetch margin and market price in parallel to reduce latency
+      const needsPrice = !price || finalOrderType === 'market';
+      const [availableMargin, tickerResult] = await Promise.all([
+        this.api.getAvailableMargin().catch(err => {
+          logger.info(`Margin check failed (non-blocking): ${err.message}`);
+          return null;
+        }),
+        needsPrice
+          ? this.api.getTicker(symbol)
+          : Promise.resolve(null),
+      ]);
+
       // Step 3: Get position size (priority: alertData.position_size_usd > config.json)
-      // SignalStudio now sends pre-built orders with position_size_usd
       const exchangeConfig = this.config[this.exchange] || {};
       let finalTradeAmount;
       
       if (alertData.position_size_usd || alertData.positionSizeUsd) {
-        // Use position size from SignalStudio (pre-built order)
         finalTradeAmount = parseFloat(alertData.position_size_usd || alertData.positionSizeUsd);
         logger.info(`Using position size from SignalStudio: $${finalTradeAmount}`);
       } else {
-        // Fallback to config.json (backward compatibility for direct webhooks)
         const exchangeTradeAmount = exchangeConfig.tradeAmount || 600;
         const positionMultiplier = exchangeConfig.positionMultiplier || 1.0;
         finalTradeAmount = exchangeTradeAmount * positionMultiplier;
         logger.info(`Using position size from config: $${finalTradeAmount}`);
       }
       
-      logger.info(`Available margin: ${availableMargin}, Position size: $${finalTradeAmount} (${this.exchange} exchange)`);
+      logger.info(`Available margin: ${availableMargin ?? 'N/A'}, Position size: $${finalTradeAmount} (${this.exchange} exchange)`);
 
-      // Step 4: Get current market price if not provided (for MARKET orders)
       let entryPrice = price;
-      if (!entryPrice || finalOrderType === 'market') {
-        const ticker = await this.api.getTicker(symbol);
-        entryPrice = parseFloat(ticker.lastPrice || ticker.price);
+      if (tickerResult) {
+        entryPrice = parseFloat(tickerResult.lastPrice || tickerResult.price);
         logger.info(`Fetched current market price for ${symbol}: ${entryPrice}`);
       }
       
