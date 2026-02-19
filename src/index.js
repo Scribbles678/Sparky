@@ -1341,6 +1341,27 @@ async function bootstrap() {
       logger.warn('⚠️  Position price updater skipped (database not configured)');
     }
 
+    // Standalone microstructure collector (public WS only, no auth needed)
+    // Runs even without legacy exchange credentials -- ML features are exchange-agnostic
+    if (!microstructureCollector && dbConnected) {
+      try {
+        const AsterWebSocket = require('./exchanges/asterWebSocket');
+        const MicrostructureCollector = require('./services/microstructureCollector');
+        
+        const publicWs = new AsterWebSocket({
+          restApi: null,
+          environment: 'production',
+        });
+        
+        microstructureCollector = new MicrostructureCollector(publicWs);
+        await microstructureCollector.start();
+        logger.info('✅ Standalone microstructure collector started (public WS, no auth)');
+      } catch (mcError) {
+        logger.warn(`⚠️ Standalone microstructure collector failed: ${mcError.message}`);
+        microstructureCollector = null;
+      }
+    }
+
     Object.entries(optionMonitors).forEach(([name, monitor]) => {
       try {
         monitor.start();
