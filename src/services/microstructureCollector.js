@@ -21,7 +21,7 @@ const MAX_TRADES = 500;
 // Symbols to track — must match pattern scanner's active crypto symbols.
 // Expand when CRYPTO_TESTNET_MODE is disabled and more symbols go live.
 const DEFAULT_SYMBOLS = [
-  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'BNBUSDT',
+  'ASTERUSDT', 'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT',
 ];
 
 /**
