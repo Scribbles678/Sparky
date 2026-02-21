@@ -626,6 +626,41 @@ class TradeExecutor {
           stopLossOrderId,
           stopLossType,
         });
+      } else if (this.api.exchangeName === 'tradier' && this.api.placeOtocoOrder && finalStopLoss && finalTakeProfit) {
+        // Tradier OTOCO bracket order: entry + TP + SL as linked group
+        const stopPrice = calculateStopLoss(side, entryPrice, finalStopLoss);
+        const tpPrice = calculateTakeProfit(side, entryPrice, finalTakeProfit);
+        const roundedStopPrice = roundPrice(stopPrice);
+        const roundedTpPrice = roundPrice(tpPrice);
+
+        const tradierOptions = {};
+        if (finalUseTrailingStop && (finalTrailingStopPercent || finalTrailingStop)) {
+          tradierOptions.trailingStop = finalTrailingStopPercent || finalTrailingStop;
+        }
+
+        logger.info('Using Tradier OTOCO bracket order (entry + TP + SL)', {
+          takeProfit: roundedTpPrice,
+          stopLoss: roundedStopPrice,
+          trailing: !!tradierOptions.trailingStop,
+        });
+
+        const bracketResult = await this.api.placeOtocoOrder(
+          symbol, side, roundedQuantity, finalOrderType,
+          finalOrderType === 'limit' ? entryPrice : null,
+          roundedTpPrice, roundedStopPrice, tradierOptions
+        );
+
+        orderResult = bracketResult;
+        takeProfitOrderId = bracketResult.takeProfitOrderId || 'tradier_otoco_tp';
+        stopLossOrderId = bracketResult.stopLossOrderId || 'tradier_otoco_sl';
+        stopLossType = tradierOptions.trailingStop ? 'TRAILING' : 'REGULAR';
+
+        logger.info('Tradier OTOCO bracket order placed', {
+          orderId: orderResult.orderId,
+          takeProfitOrderId,
+          stopLossOrderId,
+          stopLossType,
+        });
       } else if (this.api.exchangeName === 'oanda' && finalOrderType === 'market' && (finalStopLoss || finalTakeProfit || finalUseTrailingStop)) {
         // OANDA native bracket: attach TP/SL/trailing directly to the market order
         const oandaOptions = {};
@@ -721,29 +756,48 @@ class TradeExecutor {
 
       // Step 6: Place stop loss and take profit (skip if already handled by bracket/OTO order)
       if (!stopLossOrderId && !takeProfitOrderId) {
-        // Check if we should use OCO order (Alpaca only, for exit orders when position already exists)
-        if (isAlpaca && finalUseOCOOrder && finalStopLoss && finalTakeProfit) {
+        // Check if we should use OCO order (Alpaca or Tradier, for exit orders when position already exists)
+        const isTradierExchange = this.api.exchangeName === 'tradier';
+        if ((isAlpaca || isTradierExchange) && finalStopLoss && finalTakeProfit && (finalUseOCOOrder || isTradierExchange)) {
           const stopPrice = calculateStopLoss(side, entryPrice, finalStopLoss);
           const tpPrice = calculateTakeProfit(side, entryPrice, finalTakeProfit);
           const roundedStopPrice = roundPrice(stopPrice);
           const roundedTpPrice = roundPrice(tpPrice);
           const exitSide = getOppositeSide(side);
           
-          logger.info('Using Alpaca OCO order (TP or SL, not both)');
-          
-          const ocoResult = await this.api.placeOCOOrder(
-            symbol,
-            exitSide,
-            roundedQuantity,
-            roundedTpPrice,
-            roundedStopPrice,
-            finalStopLossLimitPrice ? roundPrice(calculateStopLoss(side, entryPrice, finalStopLoss) - (finalStopLossLimitPrice || 0)) : null
-          );
-          
-          stopLossOrderId = 'oco_sl';
-          takeProfitOrderId = 'oco_tp';
-          
-          logger.info('OCO order placed successfully', { orderId: ocoResult.orderId });
+          if (isTradierExchange && this.api.placeOcoOrder) {
+            const tradierOcoOptions = {};
+            const useTrailingForOco = (finalUseTrailingStop || finalTrailingStop || finalTrailingStopPercent);
+            if (useTrailingForOco && (finalTrailingStopPercent || finalTrailingStop)) {
+              tradierOcoOptions.trailingStop = finalTrailingStopPercent || finalTrailingStop;
+            }
+
+            logger.info('Using Tradier OCO order (TP + SL linked pair)');
+            const ocoResult = await this.api.placeOcoOrder(
+              symbol, exitSide, roundedQuantity,
+              roundedTpPrice, roundedStopPrice, tradierOcoOptions
+            );
+            stopLossOrderId = 'oco_sl';
+            takeProfitOrderId = 'oco_tp';
+            stopLossType = tradierOcoOptions.trailingStop ? 'TRAILING' : 'REGULAR';
+            logger.info('Tradier OCO order placed', { orderId: ocoResult.orderId });
+          } else {
+            logger.info('Using Alpaca OCO order (TP or SL, not both)');
+            
+            const ocoResult = await this.api.placeOCOOrder(
+              symbol,
+              exitSide,
+              roundedQuantity,
+              roundedTpPrice,
+              roundedStopPrice,
+              finalStopLossLimitPrice ? roundPrice(calculateStopLoss(side, entryPrice, finalStopLoss) - (finalStopLossLimitPrice || 0)) : null
+            );
+            
+            stopLossOrderId = 'oco_sl';
+            takeProfitOrderId = 'oco_tp';
+            
+            logger.info('OCO order placed successfully', { orderId: ocoResult.orderId });
+          }
         } else {
           // Standard TP/SL placement
           
@@ -754,7 +808,8 @@ class TradeExecutor {
               const isOanda = this.api.exchangeName === 'oanda';
               const isAster = this.api.exchangeName === 'aster';
               const isApex = this.api.exchangeId === 'apex';
-              const useTrailing = (isOanda || isAlpaca || isAster || isApex) && (finalUseTrailingStop || finalTrailingStop || finalTrailingStopPercent);
+              const isTradier = this.api.exchangeName === 'tradier';
+              const useTrailing = (isOanda || isAlpaca || isAster || isApex || isTradier) && (finalUseTrailingStop || finalTrailingStop || finalTrailingStopPercent);
               
               if (useTrailing && (finalTrailingStop || finalTrailingStopPercent)) {
                 // Place trailing stop (OANDA uses pips, Alpaca uses $ or %)
@@ -847,6 +902,24 @@ class TradeExecutor {
                   logger.info('Apex trailing stop placed', {
                     orderId: stopLossOrderId,
                     callbackRate,
+                    type: 'TRAILING',
+                  });
+                } else if (this.api.exchangeName === 'tradier' && (finalTrailingStop || finalTrailingStopPercent)) {
+                  const trailPercent = finalTrailingStopPercent || finalTrailingStop;
+
+                  const stopLossResult = await this.api.placeTrailingStop(
+                    symbol,
+                    getOppositeSide(side),
+                    roundedQuantity,
+                    trailPercent
+                  );
+
+                  stopLossOrderId = stopLossResult.orderId;
+                  stopLossType = 'TRAILING';
+
+                  logger.info('Tradier trailing stop placed', {
+                    orderId: stopLossOrderId,
+                    trailPercent,
                     type: 'TRAILING',
                   });
                 }

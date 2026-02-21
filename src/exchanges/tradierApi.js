@@ -289,6 +289,260 @@ class TradierAPI extends BaseExchangeAPI {
   }
 
   /**
+   * Place OTOCO bracket order (entry + TP + SL as linked group)
+   * Order 1 (entry) triggers Order 2 (TP) and Order 3 (SL) as an OCO pair
+   */
+  async placeOtocoOrder(symbol, side, quantity, entryType, entryPrice, takeProfitPrice, stopLossPrice, options = {}) {
+    const exitSide = side.toLowerCase() === 'buy' ? 'sell' : 'buy';
+    const duration = options.duration || 'gtc';
+
+    const orderData = {
+      account_id: this.accountId,
+      class: 'otoco',
+      duration: duration,
+      // Leg 1: Entry
+      'type[0]': entryType || 'market',
+      'symbol[0]': symbol,
+      'side[0]': side.toLowerCase(),
+      'quantity[0]': Math.abs(quantity).toString(),
+    };
+
+    if (entryType === 'limit' && entryPrice) {
+      orderData['price[0]'] = entryPrice.toString();
+    }
+
+    // Leg 2: Take Profit (limit sell)
+    orderData['type[1]'] = 'limit';
+    orderData['symbol[1]'] = symbol;
+    orderData['side[1]'] = exitSide;
+    orderData['quantity[1]'] = Math.abs(quantity).toString();
+    orderData['price[1]'] = takeProfitPrice.toString();
+
+    // Leg 3: Stop Loss (stop sell)
+    orderData['type[2]'] = options.trailingStop ? 'trailing_stop' : 'stop';
+    orderData['symbol[2]'] = symbol;
+    orderData['side[2]'] = exitSide;
+    orderData['quantity[2]'] = Math.abs(quantity).toString();
+
+    if (options.trailingStop) {
+      orderData['stop[2]'] = options.trailingStop.toString();
+    } else {
+      orderData['stop[2]'] = stopLossPrice.toString();
+    }
+
+    logger.info('Placing Tradier OTOCO bracket order', {
+      symbol, side, quantity, entryType,
+      takeProfit: takeProfitPrice, stopLoss: stopLossPrice,
+      trailing: !!options.trailingStop,
+    });
+
+    const response = await this.makeRequest('POST', `/accounts/${this.accountId}/orders`, orderData);
+
+    return {
+      orderId: response.order?.id || response.order?.order_id,
+      status: response.order?.status || 'pending',
+      takeProfitOrderId: 'otoco_tp',
+      stopLossOrderId: 'otoco_sl',
+    };
+  }
+
+  /**
+   * Place OCO order (TP + SL linked pair for existing position)
+   */
+  async placeOcoOrder(symbol, side, quantity, takeProfitPrice, stopLossPrice, options = {}) {
+    const duration = options.duration || 'gtc';
+
+    const orderData = {
+      account_id: this.accountId,
+      class: 'oco',
+      duration: duration,
+      // Leg 1: Take Profit (limit)
+      'type[0]': 'limit',
+      'symbol[0]': symbol,
+      'side[0]': side.toLowerCase(),
+      'quantity[0]': Math.abs(quantity).toString(),
+      'price[0]': takeProfitPrice.toString(),
+      // Leg 2: Stop Loss
+      'type[1]': options.trailingStop ? 'trailing_stop' : 'stop',
+      'symbol[1]': symbol,
+      'side[1]': side.toLowerCase(),
+      'quantity[1]': Math.abs(quantity).toString(),
+    };
+
+    if (options.trailingStop) {
+      orderData['stop[1]'] = options.trailingStop.toString();
+    } else {
+      orderData['stop[1]'] = stopLossPrice.toString();
+    }
+
+    logger.info('Placing Tradier OCO order', {
+      symbol, side, quantity,
+      takeProfit: takeProfitPrice, stopLoss: stopLossPrice,
+      trailing: !!options.trailingStop,
+    });
+
+    const response = await this.makeRequest('POST', `/accounts/${this.accountId}/orders`, orderData);
+
+    return {
+      orderId: response.order?.id || response.order?.order_id,
+      status: response.order?.status || 'pending',
+    };
+  }
+
+  /**
+   * Place OTO order (entry triggers exit)
+   */
+  async placeOtoOrder(symbol, side, quantity, entryType, entryPrice, exitType, exitPrice, exitStop, options = {}) {
+    const exitSide = side.toLowerCase() === 'buy' ? 'sell' : 'buy';
+    const duration = options.duration || 'gtc';
+
+    const orderData = {
+      account_id: this.accountId,
+      class: 'oto',
+      duration: duration,
+      // Leg 1: Entry
+      'type[0]': entryType || 'market',
+      'symbol[0]': symbol,
+      'side[0]': side.toLowerCase(),
+      'quantity[0]': Math.abs(quantity).toString(),
+      // Leg 2: Exit
+      'type[1]': exitType || 'stop',
+      'symbol[1]': symbol,
+      'side[1]': exitSide,
+      'quantity[1]': Math.abs(quantity).toString(),
+    };
+
+    if (entryType === 'limit' && entryPrice) {
+      orderData['price[0]'] = entryPrice.toString();
+    }
+    if (exitPrice) {
+      orderData['price[1]'] = exitPrice.toString();
+    }
+    if (exitStop) {
+      orderData['stop[1]'] = exitStop.toString();
+    }
+
+    logger.info('Placing Tradier OTO order', { symbol, side, quantity, entryType, exitType });
+    const response = await this.makeRequest('POST', `/accounts/${this.accountId}/orders`, orderData);
+
+    return {
+      orderId: response.order?.id || response.order?.order_id,
+      status: response.order?.status || 'pending',
+    };
+  }
+
+  /**
+   * Place trailing stop order
+   */
+  async placeTrailingStop(symbol, side, quantity, trailPercent) {
+    const orderData = {
+      account_id: this.accountId,
+      class: 'equity',
+      symbol: symbol,
+      side: side.toLowerCase(),
+      quantity: Math.abs(quantity).toString(),
+      type: 'trailing_stop',
+      stop: trailPercent.toString(),
+      duration: 'gtc',
+    };
+
+    logger.info('Placing Tradier trailing stop', { symbol, side, quantity, trailPercent });
+    const response = await this.makeRequest('POST', `/accounts/${this.accountId}/orders`, orderData);
+
+    return {
+      orderId: response.order?.id || response.order?.order_id,
+      status: response.order?.status || 'pending',
+    };
+  }
+
+  /**
+   * Place stop-limit order
+   */
+  async placeStopLimitOrder(symbol, side, quantity, stopPrice, limitPrice) {
+    const orderData = {
+      account_id: this.accountId,
+      class: 'equity',
+      symbol: symbol,
+      side: side.toLowerCase(),
+      quantity: Math.abs(quantity).toString(),
+      type: 'stop_limit',
+      stop: stopPrice.toString(),
+      price: limitPrice.toString(),
+      duration: 'gtc',
+    };
+
+    logger.info('Placing Tradier stop-limit order', { symbol, side, quantity, stopPrice, limitPrice });
+    const response = await this.makeRequest('POST', `/accounts/${this.accountId}/orders`, orderData);
+
+    return {
+      orderId: response.order?.id || response.order?.order_id,
+      status: response.order?.status || 'pending',
+    };
+  }
+
+  /**
+   * Get all orders for the account
+   */
+  async getOrders() {
+    const response = await this.makeRequest('GET', `/accounts/${this.accountId}/orders`);
+    
+    if (!response.orders || !response.orders.order) {
+      return [];
+    }
+    
+    const orders = Array.isArray(response.orders.order) 
+      ? response.orders.order 
+      : [response.orders.order];
+    
+    return orders;
+  }
+
+  /**
+   * Get gain/loss report from Tradier
+   */
+  async getGainLoss(page = 1, limit = 50) {
+    const response = await this.makeRequest('GET', `/accounts/${this.accountId}/gainloss`, {
+      page: page.toString(),
+      limit: limit.toString(),
+    });
+
+    if (!response.gainloss || !response.gainloss.closed_position) {
+      return [];
+    }
+
+    const positions = Array.isArray(response.gainloss.closed_position)
+      ? response.gainloss.closed_position
+      : [response.gainloss.closed_position];
+
+    return positions;
+  }
+
+  /**
+   * Get account history (trades, dividends, transfers)
+   */
+  async getAccountHistory(options = {}) {
+    const params = {};
+    if (options.page) params.page = options.page.toString();
+    if (options.limit) params.limit = options.limit.toString();
+    if (options.type) params.type = options.type;
+    if (options.start) params.start = options.start;
+    if (options.end) params.end = options.end;
+    if (options.symbol) params.symbol = options.symbol;
+
+    const response = await this.makeRequest('GET', `/accounts/${this.accountId}/history`, params);
+
+    if (!response.history || !response.history.event) {
+      return [];
+    }
+
+    const events = Array.isArray(response.history.event)
+      ? response.history.event
+      : [response.history.event];
+
+    return events;
+  }
+
+  /**
    * Close position (market order to close)
    */
   async closePosition(symbol, side, quantity) {

@@ -117,6 +117,49 @@ class TradierOptionsAPI extends TradierAPI {
     return response.order;
   }
 
+  /**
+   * Place multileg option order (spreads, straddles, iron condors, etc.)
+   * Supports up to 4 legs.
+   * @param {string} symbol - Underlying symbol (e.g., 'AAPL')
+   * @param {Array} legs - Array of leg objects: { optionSymbol, side, quantity }
+   * @param {Object} options - { type: 'market'|'debit'|'credit'|'even', price, duration }
+   */
+  async createMultilegOrder(symbol, legs = [], options = {}) {
+    if (!Array.isArray(legs) || legs.length < 2 || legs.length > 4) {
+      throw new Error('Multileg order requires 2-4 legs');
+    }
+
+    const params = {
+      class: 'multileg',
+      symbol: symbol,
+      type: options.type || 'market',
+      duration: options.duration || 'day',
+    };
+
+    if (options.price !== undefined && options.price !== null) {
+      params.price = options.price.toString();
+    }
+
+    if (options.tag) {
+      params.tag = options.tag;
+    }
+
+    legs.forEach((leg, index) => {
+      params[`option_symbol[${index}]`] = leg.optionSymbol;
+      params[`side[${index}]`] = leg.side;
+      params[`quantity[${index}]`] = String(leg.quantity);
+    });
+
+    logger.info('Placing Tradier multileg option order', { symbol, legs: legs.length, type: options.type });
+    const response = await this.makeRequest(
+      'POST',
+      `/accounts/${this.accountId}/orders`,
+      params
+    );
+
+    return response.order;
+  }
+
   async createOptionMarketOrder({
     underlyingSymbol,
     optionSymbol,
