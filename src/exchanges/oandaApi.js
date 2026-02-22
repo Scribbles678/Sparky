@@ -402,6 +402,29 @@ class OandaAPI extends BaseExchangeAPI {
   }
 
   /**
+   * Get all pending (unfilled) orders for the account.
+   * Returns normalized shape: { id, symbol, status, createTime, type, side }
+   * OANDA pending orders use state=PENDING; the instrument field carries the symbol.
+   */
+  async getOpenOrders() {
+    const res = await this.makeRequest(
+      'GET',
+      `/v3/accounts/${this.accountId}/orders?state=PENDING&count=100`,
+    );
+    const orders = (res && res.orders) ? res.orders : [];
+    return orders.map(o => ({
+      id: o.id,
+      // instrument carries the symbol (e.g. "EUR_USD")
+      symbol: o.instrument || null,
+      status: 'pending',
+      createTime: o.createTime,
+      type: String(o.type || '').toLowerCase(),
+      // OANDA encodes direction in `units`: positive = buy, negative = sell
+      side: o.units != null ? (parseFloat(o.units) >= 0 ? 'buy' : 'sell') : null,
+    }));
+  }
+
+  /**
    * Cancel order
    */
   async cancelOrder(symbol, orderId) {

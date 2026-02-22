@@ -306,6 +306,25 @@ class AsterAPI {
   async getOrder(symbol, orderId) {
     return this.makeRequest('GET', `/fapi/v1/order?symbol=${symbol}&orderId=${orderId}`);
   }
+
+  /**
+   * Get all open orders (optionally filtered by symbol)
+   * Returns normalized shape: { id, symbol, status, time, type, side }
+   */
+  async getOpenOrders(symbol) {
+    const params = {};
+    if (symbol) params.symbol = symbol;
+    const raw = await this.makeRequest('GET', '/fapi/v1/openOrders', params);
+    const orders = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+    return orders.map(o => ({
+      id: o.orderId ?? o.id,
+      symbol: o.symbol,
+      status: String(o.status || 'NEW').toLowerCase(),
+      time: o.time || o.updateTime,
+      type: String(o.type || '').toLowerCase(),
+      side: String(o.side || '').toLowerCase(),
+    }));
+  }
 }
 
 module.exports = AsterAPI;

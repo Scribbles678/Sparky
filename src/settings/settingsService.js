@@ -53,6 +53,17 @@ function getFallbackExchangeSettings(exchange) {
     max_signal_age_sec: exchangeConfig.maxSignalAgeSec || 10,
     auto_close_outside_window: exchangeConfig.autoCloseOutsideWindow !== false,
     max_open_positions: exchangeConfig.maxOpenPositions || 0,
+    cancel_pending_orders: exchangeConfig.cancelPendingOrders || false,
+    cancel_pending_after: exchangeConfig.cancelPendingAfter || '15m',
+    close_orphaned_positions: exchangeConfig.closeOrphanedPositions || false,
+    orphan_grace_minutes: exchangeConfig.orphanGraceMinutes || 5,
+    kill_switch: exchangeConfig.killSwitch || false,
+    max_daily_loss_usd: exchangeConfig.maxDailyLossUsd || 0,
+    max_consecutive_failures: exchangeConfig.maxConsecutiveFailures || 0,
+    max_concurrent_positions: exchangeConfig.maxConcurrentPositions || 0,
+    max_position_size_usd: exchangeConfig.maxPositionSizeUsd || 0,
+    max_trades_per_week: exchangeConfig.maxTradesPerWeek || 0,
+    max_loss_per_week_usd: exchangeConfig.maxLossPerWeekUsd || 0,
     extra_settings: exchangeConfig.extra_settings || {},
   };
 }

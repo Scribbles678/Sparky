@@ -1080,6 +1080,9 @@ class TradeExecutor {
         success: true,
         action: 'opened',
         position,
+        orderId: orderResult.orderId,
+        order_id: orderResult.orderId,
+        fill_price: entryPrice,
       };
     } catch (error) {
       logger.logError('Failed to open position', error, { symbol, action });

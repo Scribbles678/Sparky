@@ -340,6 +340,31 @@ class CCXTProExchangeAPI extends BaseExchangeAPI {
     }
   }
 
+  /**
+   * Get all open (pending/unfilled) orders.
+   * Returns normalized shape: { id, symbol, status, timestamp, datetime, type, side }
+   * Delegates to CCXT's fetchOpenOrders which handles all supported exchanges.
+   */
+  async getOpenOrders(symbol) {
+    await this.loadMarkets();
+    try {
+      const normalizedSymbol = symbol ? this.normalizeSymbol(symbol) : undefined;
+      const orders = await this.exchange.fetchOpenOrders(normalizedSymbol);
+      return (orders || []).map(o => ({
+        id: o.id,
+        symbol: o.symbol,
+        status: o.status || 'open',
+        timestamp: o.timestamp,
+        datetime: o.datetime,
+        type: o.type,
+        side: o.side,
+      }));
+    } catch (error) {
+      logger.logError(`Failed to fetch open orders`, error);
+      return [];
+    }
+  }
+
   async cancelAllOrders(symbol) {
     await this.loadMarkets();
     try {

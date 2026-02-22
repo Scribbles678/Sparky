@@ -24,7 +24,7 @@ const {
 } = require('./supabaseClient');
 const { notifyInvalidCredentials, notifyTradeFailed } = require('./utils/notifications');
 const { checkWebhookLimit, invalidateWebhookCountCache, cleanupOldMonthCaches } = require('./utils/webhookLimits');
-const { checkRiskLimits } = require('./utils/riskLimits');
+const { checkRiskLimits, recordTradeFailure, resetTradeFailures, invalidateRiskLimitCache } = require('./utils/riskLimits');
 const { getExchangeTradeSettings } = require('./supabaseClient');
 
 // ==================== Configuration ====================
@@ -980,8 +980,12 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
         // Load exchange trade settings (with caching)
         const exchangeSettings = await getExchangeTradeSettings(exchange, userId);
         
-        // Check risk limits (max trades per week, max loss per week)
-        const riskCheck = await checkRiskLimits(userId, exchange, exchangeSettings);
+        // Check all risk limits (kill switch, weekends, signal age, daily/weekly
+        // loss, consecutive failures, concurrent positions, position size cap)
+        const riskCheck = await checkRiskLimits(userId, exchange, exchangeSettings, {
+          signalTimestamp: alertData.timestamp ? Number(alertData.timestamp) : null,
+          action: alertData.action,
+        });
         
         if (!riskCheck.allowed) {
           logger.warn('Trade rejected: risk limit exceeded', {
@@ -990,6 +994,7 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
             limitType: riskCheck.limitType,
             current: riskCheck.current,
             limit: riskCheck.limit,
+            reason: riskCheck.reason,
           });
           
           return res.status(429).json({
@@ -1003,12 +1008,26 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
             },
           });
         }
+
+        // Apply max_position_size_usd cap — reduce the requested size if it exceeds the limit
+        if (riskCheck.positionSizeCap != null && alertData.position_size_usd) {
+          const requested = Number(alertData.position_size_usd);
+          if (requested > riskCheck.positionSizeCap) {
+            logger.info(`[RiskLimits] Position size capped: $${requested} → $${riskCheck.positionSizeCap} (max_position_size_usd for ${exchange})`);
+            alertData.position_size_usd = riskCheck.positionSizeCap;
+          }
+        }
         
         logger.debug('Risk limit check passed', {
           userId,
           exchange,
+          killSwitch: exchangeSettings.kill_switch,
+          allowWeekends: exchangeSettings.allow_weekends,
+          maxDailyLoss: exchangeSettings.max_daily_loss_usd || 'unlimited',
           maxTradesPerWeek: exchangeSettings.max_trades_per_week || 'unlimited',
           maxLossPerWeek: exchangeSettings.max_loss_per_week_usd || 'unlimited',
+          maxConcurrentPositions: exchangeSettings.max_concurrent_positions || 'unlimited',
+          positionSizeCap: riskCheck.positionSizeCap ?? 'unlimited',
         });
       } catch (riskError) {
         // On error, log but allow webhook (graceful degradation)
@@ -1094,6 +1113,16 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
     const duration = Date.now() - startTime;
     logger.info(`Webhook processed successfully in ${duration}ms`, result);
 
+    // Track consecutive failures for the circuit breaker
+    if (userId) {
+      if (result.success) {
+        resetTradeFailures(userId, exchange);
+        invalidateRiskLimitCache(userId, exchange);
+      } else {
+        recordTradeFailure(userId, exchange);
+      }
+    }
+
     // Log webhook request to database (async, fire-and-forget)
     // This is needed for limit tracking and analytics
     if (userId) {
@@ -1130,14 +1159,20 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
 
     // Send failure notification (async, fire-and-forget)
     const userId = alertData?.user_id || alertData?.userId;
+    const failedExchange = (alertData?.exchange || '').toLowerCase();
     if (userId && alertData?.symbol) {
       notifyTradeFailed(
         userId,
         alertData.symbol,
         alertData.action || 'unknown',
-        alertData.exchange || 'unknown',
+        failedExchange || 'unknown',
         error.message
       );
+    }
+
+    // Increment consecutive failure counter for the circuit breaker
+    if (userId && failedExchange) {
+      recordTradeFailure(userId, failedExchange);
     }
 
     res.status(500).json({
@@ -1391,6 +1426,24 @@ async function bootstrap() {
     } catch (error) {
       logger.warn('⚠️  Failed to start auto-retrain scheduler:', error.message);
     }
+
+    // Pending Order Cleanup: cancel stale orders for users who have auto-cancel enabled
+    try {
+      const { startPendingOrderCleanup } = require('./scheduledJobs/pendingOrderCleanup');
+      startPendingOrderCleanup(60_000); // checks every 60 seconds
+      logger.info('✅ Pending order cleanup started (checks every 60s)');
+    } catch (error) {
+      logger.warn('⚠️  Failed to start pending order cleanup:', error.message);
+    }
+
+    // Orphaned Position Guard: close positions that have no active exit orders
+    try {
+      const { startOrphanedPositionGuard } = require('./scheduledJobs/orphanedPositionGuard');
+      startOrphanedPositionGuard(60_000); // checks every 60 seconds
+      logger.info('✅ Orphaned position guard started (checks every 60s)');
+    } catch (error) {
+      logger.warn('⚠️  Failed to start orphaned position guard:', error.message);
+    }
   });
 }
 
@@ -1452,6 +1505,22 @@ const shutdown = async () => {
       logger.warn('Failed to stop options monitor', error);
     }
   });
+
+  // Stop pending order cleanup
+  try {
+    const { stopPendingOrderCleanup } = require('./scheduledJobs/pendingOrderCleanup');
+    stopPendingOrderCleanup();
+  } catch (error) {
+    logger.warn('Failed to stop pending order cleanup', error);
+  }
+
+  // Stop orphaned position guard
+  try {
+    const { stopOrphanedPositionGuard } = require('./scheduledJobs/orphanedPositionGuard');
+    stopOrphanedPositionGuard();
+  } catch (error) {
+    logger.warn('Failed to stop orphaned position guard', error);
+  }
 
   if (server) {
     server.close(() => {
