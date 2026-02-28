@@ -523,26 +523,44 @@ class ExchangeFactory {
         };
       }
       
-      case 'oanda':
+      case 'oanda': {
+        // OANDA adapter expects `live` or `practice`
+        // while SignalStudio credentials store `production` or `sandbox`.
+        // Normalize here so all callers can use SignalStudio convention.
+        const oandaEnv = credentials.environment === 'production'
+          ? 'live'
+          : 'practice';
         return {
           accountId: credentials.accountId || credentials.extra?.accountId,
           accessToken: credentials.accessToken || credentials.apiKey,
-          environment: credentials.environment || 'practice',
+          environment: oandaEnv,
         };
+      }
       
-      case 'tradier':
+      case 'tradier': {
+        // Tradier adapter expects `live` or `sandbox`.
+        // Normalize SignalStudio's `production` to `live`.
+        const tradierEnv = credentials.environment === 'production'
+          ? 'live'
+          : 'sandbox';
         return {
           accountId: credentials.accountId || credentials.extra?.accountId,
           accessToken: credentials.accessToken || credentials.apiKey,
-          environment: credentials.environment || 'sandbox',
+          environment: tradierEnv,
         };
+      }
 
-      case 'tradier_options':
+      case 'tradier_options': {
+        // Tradier options shares Tradier environment semantics.
+        const tradierOptionsEnv = credentials.environment === 'production'
+          ? 'live'
+          : 'sandbox';
         return {
           accountId: credentials.accountId || credentials.extra?.accountId,
           accessToken: credentials.accessToken || credentials.apiKey,
-          environment: credentials.environment || 'sandbox',
+          environment: tradierOptionsEnv,
         };
+      }
 
       case 'kalshi':
         return {

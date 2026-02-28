@@ -729,6 +729,168 @@ app.get('/positions/exchange/fills', async (req, res) => {
 });
 
 /**
+ * Normalize heterogeneous broker order payloads into one shape.
+ */
+function normalizeExchangeOrder(order = {}) {
+  const quantityRaw = order.quantity ?? order.qty ?? order.origQty ?? order.size ?? order.units;
+  const filledRaw = order.filledQuantity ?? order.exec_quantity ?? order.executedQty ?? order.filled ?? order.cumQty;
+  const remainingRaw = order.remainingQuantity ?? order.remaining_quantity ?? order.remainingQty ?? order.leavesQty;
+
+  return {
+    id: String(order.id ?? order.orderId ?? order.order_id ?? ''),
+    symbol: order.symbol || order.instrument || null,
+    side: String(order.side || '').toLowerCase() || null,
+    type: String(order.type || order.orderType || '').toLowerCase() || null,
+    status: String(order.status || order.state || 'open').toLowerCase(),
+    quantity: parseFloat(quantityRaw || 0),
+    filledQuantity: parseFloat(filledRaw || 0),
+    remainingQuantity: parseFloat(remainingRaw || 0),
+    price: order.price != null ? parseFloat(order.price) : null,
+    stopPrice: order.stopPrice != null
+      ? parseFloat(order.stopPrice)
+      : (order.stop_price != null ? parseFloat(order.stop_price) : null),
+    avgFillPrice: order.avgFillPrice != null
+      ? parseFloat(order.avgFillPrice)
+      : (order.avg_fill_price != null ? parseFloat(order.avg_fill_price) : null),
+    createdAt: order.createTime || order.created_at || order.time || order.timestamp || null,
+    updatedAt: order.updateTime || order.updated_at || order.transaction_date || null,
+    class: order.class || order.order_class || null,
+    raw: order,
+  };
+}
+
+/**
+ * Get exchange orders (open by default, or full history when supported).
+ * Query params: environment, userId, exchange (default: aster), symbol, limit, status=open|all
+ */
+app.get('/orders/exchange', async (req, res) => {
+  try {
+    const environment = req.query.environment || 'production';
+    const exchangeName = (req.query.exchange || 'aster').toLowerCase();
+    const userId = req.query.userId || null;
+    const symbol = req.query.symbol || null;
+    const limit = parseInt(req.query.limit, 10) || 100;
+    const status = String(req.query.status || 'open').toLowerCase();
+
+    let api = null;
+
+    if (exchangeName === 'aster' && environment === 'production') {
+      api = asterApi;
+    }
+
+    if (!api) {
+      if (userId) {
+        api = await ExchangeFactory.createExchangeForUser(userId, exchangeName, environment);
+      } else {
+        const { getExchangeCredentialsByEnvironment } = require('./supabaseClient');
+        const creds = await getExchangeCredentialsByEnvironment(exchangeName, environment);
+        if (creds) {
+          const config = ExchangeFactory.mapCredentialsToConfig(exchangeName, creds);
+          if (config) {
+            api = ExchangeFactory.createExchange(exchangeName, config);
+          }
+        }
+      }
+    }
+
+    if (!api) {
+      return res.status(503).json({ success: false, error: `${exchangeName} ${environment} API not available` });
+    }
+
+    let rawOrders = [];
+    if (status === 'all') {
+      if (typeof api.getAllOrders === 'function') {
+        rawOrders = await api.getAllOrders(symbol || undefined, limit);
+      } else if (typeof api.getOrders === 'function') {
+        rawOrders = await api.getOrders(symbol || undefined);
+      } else if (typeof api.getOpenOrders === 'function') {
+        rawOrders = await api.getOpenOrders(symbol || undefined);
+      }
+    } else if (typeof api.getOpenOrders === 'function') {
+      rawOrders = await api.getOpenOrders(symbol || undefined);
+    } else if (typeof api.getOrders === 'function') {
+      rawOrders = await api.getOrders(symbol || undefined);
+    }
+
+    const orders = (Array.isArray(rawOrders) ? rawOrders : [])
+      .map(normalizeExchangeOrder)
+      .filter(o => !!o.id);
+
+    res.json({
+      success: true,
+      exchange: exchangeName,
+      environment,
+      status,
+      count: orders.length,
+      orders,
+    });
+  } catch (error) {
+    logger.logError('Failed to get exchange orders', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * Cancel exchange order.
+ * Body: { exchange, environment, userId, orderId, symbol }
+ */
+app.post('/orders/exchange/cancel', async (req, res) => {
+  try {
+    const exchangeName = String(req.body.exchange || 'aster').toLowerCase();
+    const environment = req.body.environment || 'production';
+    const userId = req.body.userId || null;
+    const orderId = req.body.orderId;
+    const symbol = req.body.symbol || null;
+
+    if (!orderId) {
+      return res.status(400).json({ success: false, error: 'orderId is required' });
+    }
+
+    let api = null;
+
+    if (exchangeName === 'aster' && environment === 'production') {
+      api = asterApi;
+    }
+
+    if (!api) {
+      if (userId) {
+        api = await ExchangeFactory.createExchangeForUser(userId, exchangeName, environment);
+      } else {
+        const { getExchangeCredentialsByEnvironment } = require('./supabaseClient');
+        const creds = await getExchangeCredentialsByEnvironment(exchangeName, environment);
+        if (creds) {
+          const config = ExchangeFactory.mapCredentialsToConfig(exchangeName, creds);
+          if (config) {
+            api = ExchangeFactory.createExchange(exchangeName, config);
+          }
+        }
+      }
+    }
+
+    if (!api) {
+      return res.status(503).json({ success: false, error: `${exchangeName} ${environment} API not available` });
+    }
+
+    if (typeof api.cancelOrder !== 'function') {
+      return res.status(400).json({ success: false, error: `${exchangeName} does not support order cancel` });
+    }
+
+    const result = await api.cancelOrder(symbol || undefined, orderId);
+
+    res.json({
+      success: true,
+      exchange: exchangeName,
+      environment,
+      orderId: String(orderId),
+      result: result || null,
+    });
+  } catch (error) {
+    logger.logError('Failed to cancel exchange order', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
  * TradingView webhook endpoint
  * 
  * NOTE: This endpoint now receives pre-built orders from SignalStudio.
