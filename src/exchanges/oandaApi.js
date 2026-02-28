@@ -425,6 +425,35 @@ class OandaAPI extends BaseExchangeAPI {
   }
 
   /**
+   * Get all orders (pending, filled, canceled, etc.) for the account.
+   * Returns normalized shape compatible with the unified orders endpoint.
+   *
+   * @param {string} [symbol] - Optional instrument filter (e.g. "EUR_USD")
+   * @param {number} [limit=500] - Max records to request
+   */
+  async getAllOrders(symbol, limit = 500) {
+    const count = Math.min(Math.max(limit || 1, 1), 500);
+    let endpoint = `/v3/accounts/${this.accountId}/orders?state=ALL&count=${count}`;
+    if (symbol) {
+      endpoint += `&instrument=${encodeURIComponent(symbol)}`;
+    }
+
+    const res = await this.makeRequest('GET', endpoint);
+    const orders = (res && res.orders) ? res.orders : [];
+
+    return orders.map(o => ({
+      id: o.id,
+      symbol: o.instrument || null,
+      status: String(o.state || '').toLowerCase(),
+      createTime: o.createTime,
+      type: String(o.type || '').toLowerCase(),
+      side: o.units != null ? (parseFloat(o.units) >= 0 ? 'buy' : 'sell') : null,
+      quantity: o.units != null ? Math.abs(parseFloat(o.units)) : null,
+      price: o.price != null ? parseFloat(o.price) : null,
+    }));
+  }
+
+  /**
    * Cancel order
    */
   async cancelOrder(symbol, orderId) {
