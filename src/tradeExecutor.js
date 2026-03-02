@@ -11,6 +11,8 @@ const {
   logTrade,
   savePosition,
   removePosition,
+  savePaperTrade,
+  updatePaperTradeExit,
 } = require('./supabaseClient');
 const StrategyManager = require('./strategyManager');
 const {
@@ -1062,6 +1064,27 @@ class TradeExecutor {
         strategyId: strategyId,
       });
 
+      // Mirror to paper_trades (single source of truth for Paper Trading Hub)
+      const paperTradeId = await savePaperTrade({
+        userId: alertData.userId,
+        symbol,
+        side,
+        entryPrice,
+        entryTime: new Date().toISOString(),
+        quantity: roundedQuantity,
+        positionSizeUsd: finalTradeAmount,
+        currentPrice: entryPrice,
+        assetClass: this.getAssetClass(),
+        exchange: this.exchange,
+        entryOrderId: orderResult.orderId,
+      });
+
+      // Store paperTradeId on the tracked position so closePosition can use it
+      if (paperTradeId) {
+        const trackedPos = this.tracker.getPosition(symbol, this.exchange);
+        if (trackedPos) trackedPos.paperTradeId = paperTradeId;
+      }
+
       logger.info(`Position opened successfully for ${symbol}`);
 
       // Send notification (async, fire-and-forget)
@@ -1281,6 +1304,20 @@ class TradeExecutor {
           assetClass: this.getAssetClass(), // Dynamic based on exchange
           exchange: this.exchange,
           strategyId: strategyId,
+        });
+
+        // Mirror exit to paper_trades
+        await updatePaperTradeExit({
+          userId,
+          symbol,
+          orderId: trackedPosition.orderId,
+          paperTradeId: trackedPosition.paperTradeId || null,
+          entryTime: trackedPosition.timestamp ? new Date(trackedPosition.timestamp).toISOString() : null,
+          exitPrice,
+          exitTime: new Date().toISOString(),
+          exitReason: 'MANUAL',
+          pnlUsd,
+          pnlPercent,
         });
 
         // Update strategy performance metrics

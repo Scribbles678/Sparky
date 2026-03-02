@@ -403,13 +403,17 @@ async function removePosition(symbol, userId = null) {
  * @param {Number} unrealizedPnlPercent - Unrealized P&L percent
  * @returns {Promise<Object>} - Result from Supabase
  */
-async function updatePositionPnL(symbol, currentPrice, unrealizedPnlUsd, unrealizedPnlPercent) {
+async function updatePositionPnL(symbol, currentPrice, unrealizedPnlUsd, unrealizedPnlPercent, userId = null) {
   if (!supabase) {
     return { error: 'Supabase not configured' };
   }
 
+  if (!userId) {
+    console.warn('⚠️ updatePositionPnL called without userId - may update wrong user\'s position!');
+  }
+
   try {
-    const { data, error } = await supabase
+    let query = supabase
       .from('positions')
       .update({
         current_price: currentPrice,
@@ -418,8 +422,13 @@ async function updatePositionPnL(symbol, currentPrice, unrealizedPnlUsd, unreali
         last_price_update: new Date().toISOString(),
         updated_at: new Date().toISOString()
       })
-      .eq('symbol', symbol)
-      .select();
+      .eq('symbol', symbol);
+
+    if (userId) {
+      query = query.eq('user_id', userId);
+    }
+
+    const { data, error } = await query.select();
 
     if (error) {
       console.error('❌ Error updating position P&L:', error);
@@ -862,6 +871,149 @@ function parseJsonArray(value, fallback) {
 }
 
 /**
+ * Save a new open Sparky position to paper_trades (single source of truth).
+ * Called alongside savePosition() so that all sandbox/paper trades are visible
+ * in the Paper Trading Hub regardless of which system originated them.
+ *
+ * Returns the inserted row's id so it can be stored for later exit updates.
+ *
+ * @param {Object} position - Same shape as savePosition() input
+ * @returns {Promise<string|null>} - UUID of the inserted paper_trade row, or null on error
+ */
+async function savePaperTrade(position) {
+  if (!supabase) return null;
+  if (!position.userId) {
+    console.warn('⚠️ savePaperTrade called without userId');
+    return null;
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('paper_trades')
+      .insert([{
+        source_type: 'sparky',
+        source_id: null,
+        symbol: position.symbol,
+        asset_class: position.assetClass || 'crypto',
+        direction: position.side,
+        entry_price: position.entryPrice,
+        entry_time: position.entryTime || new Date().toISOString(),
+        status: 'active',
+        current_price: position.currentPrice || position.entryPrice,
+        quantity: position.quantity,
+        position_size_usd: position.positionSizeUsd,
+        exchange: position.exchange || 'aster',
+        exchange_order_id: String(position.entryOrderId || ''),
+        user_id: position.userId,
+        mode: 'paper',
+        auto_executed: true,
+        primary_exit_strategy_id: 'default',
+        trade_type: 'sparky',
+      }])
+      .select('id')
+      .single();
+
+    if (error) {
+      console.error('❌ Error saving paper_trade:', error);
+      return null;
+    }
+
+    console.log('✅ paper_trade created:', data.id);
+    return data.id;
+  } catch (err) {
+    console.error('❌ Exception saving paper_trade:', err);
+    return null;
+  }
+}
+
+/**
+ * Mark a paper_trade row as exited when a Sparky position closes.
+ * Looks up the row by exchange_order_id (entry order) and user_id.
+ * Falls back to symbol+user_id+status=active if order_id lookup misses.
+ *
+ * @param {Object} trade - Same shape as logTrade() input, plus optional paperTradeId
+ * @returns {Promise<void>}
+ */
+async function updatePaperTradeExit(trade) {
+  if (!supabase) return;
+  if (!trade.userId) return;
+
+  try {
+    const exitPayload = {
+      status: 'exited',
+      exit_price: trade.exitPrice,
+      exit_time: trade.exitTime || new Date().toISOString(),
+      exit_reason: trade.exitReason || 'MANUAL',
+      pnl_usd: trade.pnlUsd,
+      pnl_pct: trade.pnlPercent,
+      realized_pnl_usd: trade.pnlUsd,
+      realized_pnl_pct: trade.pnlPercent,
+      hold_time_minutes: trade.entryTime
+        ? Math.round((new Date(trade.exitTime || Date.now()) - new Date(trade.entryTime)) / 60000)
+        : null,
+      updated_at: new Date().toISOString(),
+    };
+
+    // Primary lookup: by paperTradeId if caller stored it
+    if (trade.paperTradeId) {
+      const { error } = await supabase
+        .from('paper_trades')
+        .update(exitPayload)
+        .eq('id', trade.paperTradeId)
+        .eq('user_id', trade.userId);
+
+      if (!error) {
+        console.log('✅ paper_trade exited (by id):', trade.paperTradeId);
+        return;
+      }
+    }
+
+    // Secondary lookup: by entry exchange_order_id
+    if (trade.orderId) {
+      const { data: rows } = await supabase
+        .from('paper_trades')
+        .select('id')
+        .eq('user_id', trade.userId)
+        .eq('exchange_order_id', String(trade.orderId))
+        .eq('status', 'active')
+        .limit(1);
+
+      if (rows && rows.length > 0) {
+        await supabase
+          .from('paper_trades')
+          .update(exitPayload)
+          .eq('id', rows[0].id);
+        console.log('✅ paper_trade exited (by order_id):', rows[0].id);
+        return;
+      }
+    }
+
+    // Tertiary fallback: by symbol + user + active status
+    const { data: fallbackRows } = await supabase
+      .from('paper_trades')
+      .select('id')
+      .eq('user_id', trade.userId)
+      .eq('symbol', trade.symbol)
+      .eq('source_type', 'sparky')
+      .eq('status', 'active')
+      .order('entry_time', { ascending: false })
+      .limit(1);
+
+    if (fallbackRows && fallbackRows.length > 0) {
+      await supabase
+        .from('paper_trades')
+        .update(exitPayload)
+        .eq('id', fallbackRows[0].id);
+      console.log('✅ paper_trade exited (by symbol fallback):', fallbackRows[0].id);
+    } else {
+      console.warn('⚠️ updatePaperTradeExit: no matching active paper_trade found for', trade.symbol, trade.userId);
+    }
+  } catch (err) {
+    console.error('❌ Exception in updatePaperTradeExit:', err);
+  }
+}
+
+/**
  * Log webhook request to database
  * Used for limit tracking and analytics
  * @param {Object} webhookData - Webhook request data
@@ -949,7 +1101,9 @@ module.exports = {
   saveOptionTrade,
   updateOptionTrade,
   getOptionTradesByStatus,
-  logWebhookRequest,  // NEW: Log webhook requests for limit tracking
+  logWebhookRequest,
+  savePaperTrade,
+  updatePaperTradeExit,
   testConnection
 };
 

@@ -175,19 +175,25 @@ class CCXTProExchangeAPI extends BaseExchangeAPI {
       const positions = await this.exchange.fetchPositions();
       return positions
         .filter(p => parseFloat(p.contracts || 0) !== 0)
-        .map(p => ({
-          symbol: p.symbol,
-          side: p.side,
-          size: Math.abs(parseFloat(p.contracts || 0)),
-          entryPrice: parseFloat(p.entryPrice || 0),
-          markPrice: parseFloat(p.markPrice || 0),
-          unrealizedPnl: parseFloat(p.unrealizedPnl || 0),
-          leverage: parseFloat(p.leverage || 1),
-          percentage: parseFloat(p.percentage || 0),
-          notional: parseFloat(p.notional || 0),
-          collateral: parseFloat(p.collateral || 0),
-          initialMargin: parseFloat(p.initialMargin || 0),
-        }));
+        .map(p => {
+          const size = Math.abs(parseFloat(p.contracts || 0));
+          const signedAmt = p.side === 'short' ? -size : size;
+          return {
+            symbol: p.symbol,
+            side: p.side,
+            size,
+            positionAmt: signedAmt,
+            entryPrice: parseFloat(p.entryPrice || 0),
+            markPrice: parseFloat(p.markPrice || 0),
+            unrealizedPnl: parseFloat(p.unrealizedPnl || 0),
+            unrealizedProfit: parseFloat(p.unrealizedPnl || 0),
+            leverage: parseFloat(p.leverage || 1),
+            percentage: parseFloat(p.percentage || 0),
+            notional: parseFloat(p.notional || 0),
+            collateral: parseFloat(p.collateral || 0),
+            initialMargin: parseFloat(p.initialMargin || 0),
+          };
+        });
     } catch (error) {
       logger.logError(`Failed to fetch positions for ${this.exchangeId}`, error);
       if (error.message.includes('not supported') || error.message.includes('not available')) {
@@ -373,6 +379,40 @@ class CCXTProExchangeAPI extends BaseExchangeAPI {
     } catch (error) {
       logger.logError(`Failed to cancel all orders for ${symbol}`, error);
       throw error;
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Trade history — required for reconciliation fills endpoint
+  // ──────────────────────────────────────────────────────────────────────────
+
+  async getTradeHistory(symbol, limit = 50) {
+    await this.loadMarkets();
+    try {
+      const normalizedSymbol = symbol ? this.normalizeSymbol(symbol) : undefined;
+      const trades = await this.exchange.fetchMyTrades(normalizedSymbol, undefined, limit);
+      return (trades || []).map(t => ({
+        id: t.id,
+        orderId: t.order,
+        symbol: t.symbol,
+        side: (t.side || '').toUpperCase(),
+        qty: Math.abs(parseFloat(t.amount || 0)),
+        quantity: Math.abs(parseFloat(t.amount || 0)),
+        price: parseFloat(t.price || 0),
+        commission: Math.abs(parseFloat(t.fee?.cost || 0)),
+        commissionAsset: t.fee?.currency || 'USD',
+        time: t.datetime || (t.timestamp ? new Date(t.timestamp).toISOString() : null),
+        timestamp: t.timestamp,
+        realizedPnl: parseFloat(t.info?.realizedPnl || t.info?.realizedProfit || 0),
+        isMaker: t.takerOrMaker === 'maker',
+      }));
+    } catch (error) {
+      if (error.message?.includes('not supported') || error.message?.includes('not available')) {
+        logger.warn(`fetchMyTrades not supported on ${this.exchangeId}`);
+        return [];
+      }
+      logger.logError(`Failed to fetch trade history for ${this.exchangeId}`, error);
+      return [];
     }
   }
 

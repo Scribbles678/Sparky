@@ -16,14 +16,15 @@
  */
 
 const logger = require('./utils/logger');
-const { updatePositionPnL, logTrade, removePosition, savePosition } = require('./supabaseClient');
+const { updatePositionPnL, logTrade, removePosition, savePosition, updatePaperTradeExit } = require('./supabaseClient');
 const { calculatePositionSize } = require('./utils/calculations');
 
 class PositionUpdater {
-  constructor(asterApi, positionTracker, config) {
+  constructor(asterApi, positionTracker, config, userId = null) {
     this.api = asterApi;
     this.tracker = positionTracker;
     this.config = config;
+    this.userId = userId;
     this.updateInterval = null;
     this.intervalMs = 30000; // REST polling: Update every 30 seconds
     this.syncIntervalCount = 10; // Sync with exchange every 10 intervals (5 minutes)
@@ -180,7 +181,7 @@ class PositionUpdater {
         if (!this._lastPnlUpdate) this._lastPnlUpdate = new Map();
         this._lastPnlUpdate.set(symbol, now);
 
-        updatePositionPnL(symbol, currentPrice, unrealizedPnlUsd, unrealizedPnlPercent)
+        updatePositionPnL(symbol, currentPrice, unrealizedPnlUsd, unrealizedPnlPercent, this.userId)
           .catch(err => logger.logError(`WS price update failed for ${symbol}`, err));
       }
     }
@@ -345,12 +346,12 @@ class PositionUpdater {
         currentPrice
       );
 
-      // Update in Supabase
       await updatePositionPnL(
         position.symbol,
         currentPrice,
         unrealizedPnlUsd,
-        unrealizedPnlPercent
+        unrealizedPnlPercent,
+        this.userId
       );
 
       logger.debug(`Updated ${position.symbol}: $${currentPrice}, P&L: $${unrealizedPnlUsd.toFixed(2)}`);
@@ -489,16 +490,16 @@ class PositionUpdater {
         manuallyOpened: true, // Flag to indicate this was manually opened
       }, exchangeName);
       
-      // Save to Supabase
       await savePosition({
+        userId: this.userId,
         symbol,
         side,
         entryPrice,
-        entryTime: new Date().toISOString(), // Use current time as entry time (we don't know actual entry time)
+        entryTime: new Date().toISOString(),
         quantity,
         positionSizeUsd,
-        stopLossPrice: null, // Unknown for manual trades
-        takeProfitPrice: null, // Unknown for manual trades
+        stopLossPrice: null,
+        takeProfitPrice: null,
         stopLossPercent: null,
         takeProfitPercent: null,
         entryOrderId: null,
@@ -574,6 +575,7 @@ class PositionUpdater {
         : new Date().toISOString();
       
       await logTrade({
+        userId: this.userId,
         symbol: position.symbol,
         side: position.side,
         entryPrice: position.entryPrice,
@@ -598,9 +600,22 @@ class PositionUpdater {
         pnlPercent: unrealizedPnlPercent,
         exitReason,
         orderId: position.orderId,
-        // REQUIRED for TradeFI dashboard integration
-        assetClass: 'crypto', // Aster DEX trades crypto
-        exchange: this.api.exchangeName || 'aster', // Use actual exchange name
+        assetClass: 'crypto',
+        exchange: this.api.exchangeName || 'aster',
+      });
+
+      // Mirror exit to paper_trades (keeps Paper Trading Hub in sync)
+      await updatePaperTradeExit({
+        userId: this.userId,
+        symbol: position.symbol,
+        orderId: position.orderId,
+        paperTradeId: position.paperTradeId || null,
+        entryTime,
+        exitPrice,
+        exitTime: new Date().toISOString(),
+        exitReason,
+        pnlUsd: unrealizedPnlUsd,
+        pnlPercent: unrealizedPnlPercent,
       });
       
       // Cancel remaining bracket orders (TP or SL that didn't trigger)
@@ -615,8 +630,7 @@ class PositionUpdater {
         }
       }
       
-      // Remove from database positions table
-      await removePosition(position.symbol);
+      await removePosition(position.symbol, this.userId);
       
       // Remove from tracker (use exchange if available)
       const exchange = position.exchange || this.api.exchangeName || 'aster';

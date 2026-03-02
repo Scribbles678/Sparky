@@ -1246,7 +1246,7 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
         // Create a per-user position updater if one doesn't exist yet
         const updaterKey = `${userId}:${exchange}`;
         if (!positionUpdaters[updaterKey]) {
-          const userUpdater = new PositionUpdater(exchangeApi, positionTracker, config);
+          const userUpdater = new PositionUpdater(exchangeApi, positionTracker, config, userId);
           userUpdater.setStreamSource(exchangeApi);
           userUpdater.start();
           positionUpdaters[updaterKey] = userUpdater;
