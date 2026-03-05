@@ -24,6 +24,7 @@
 const { createClient } = require('@supabase/supabase-js');
 const logger = require('../utils/logger');
 const ExchangeFactory = require('../exchanges/ExchangeFactory');
+const { updatePaperTradeExit, removePosition } = require('../supabaseClient');
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -184,9 +185,38 @@ async function processUserExchange(row) {
     logger.warn(`[OrphanGuard] ⚠️  ${symbol} has been orphaned (no exit orders) for ${Math.round(orphanAge / 60000)}m — closing at market (user=${user_id})`);
 
     try {
-      await closePositionAtMarket(api, position, symbol, longPosition);
+      const closeResult = await closePositionAtMarket(api, position, symbol, longPosition);
       orphanFirstSeen.delete(orphanKey);
       logger.info(`[OrphanGuard] ✅ Closed orphaned position: ${symbol} for user=${user_id}`);
+
+      // Update paper_trades and remove position from DB
+      const exitPrice = parseFloat(closeResult?.price || closeResult?.avg_fill_price || position.cost_basis / (parseFloat(position.quantity) || 1) || 0);
+      const entryPrice = parseFloat(position.cost_basis || 0) / Math.abs(parseFloat(position.quantity || 1));
+      const qty = Math.abs(parseFloat(position.quantity || 0));
+      const pnlUsd = longPosition
+        ? (exitPrice - entryPrice) * qty
+        : (entryPrice - exitPrice) * qty;
+      const pnlPct = entryPrice > 0 ? ((exitPrice - entryPrice) / entryPrice) * 100 * (longPosition ? 1 : -1) : 0;
+
+      try {
+        await updatePaperTradeExit({
+          userId: user_id,
+          symbol,
+          exitPrice,
+          exitTime: new Date().toISOString(),
+          exitReason: 'orphan_guard',
+          pnlUsd: Math.round(pnlUsd * 100) / 100,
+          pnlPercent: Math.round(pnlPct * 100) / 100,
+        });
+      } catch (dbErr) {
+        logger.warn(`[OrphanGuard] Failed to update paper_trade for ${symbol}: ${dbErr.message}`);
+      }
+
+      try {
+        await removePosition(symbol, user_id);
+      } catch (dbErr) {
+        logger.warn(`[OrphanGuard] Failed to remove position for ${symbol}: ${dbErr.message}`);
+      }
     } catch (err) {
       logger.error(`[OrphanGuard] Failed to close orphaned ${symbol} for user=${user_id}: ${err.message}`);
     }

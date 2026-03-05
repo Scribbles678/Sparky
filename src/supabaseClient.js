@@ -670,7 +670,7 @@ async function fetchCredentialsFromDb(userId, exchange, environment = 'productio
  * @param {string} environment - Environment ('testnet', 'production', etc.)
  * @returns {Promise<Object|null>} - Credentials object or null if not found
  */
-async function getExchangeCredentialsByEnvironment(exchange, environment) {
+async function getExchangeCredentialsByEnvironment(exchange, environment, userId = null) {
   if (!supabase) {
     console.error('❌ Supabase not configured, cannot fetch exchange credentials');
     return null;
@@ -680,11 +680,17 @@ async function getExchangeCredentialsByEnvironment(exchange, environment) {
   const dbEnvironment = environment === 'testnet' ? 'sandbox' : environment;
 
   try {
-    const { data, error } = await supabase
+    let query = supabase
       .from('bot_credentials')
       .select('*')
       .eq('exchange', exchange.toLowerCase())
-      .eq('environment', dbEnvironment)
+      .eq('environment', dbEnvironment);
+
+    if (userId) {
+      query = query.eq('user_id', userId);
+    }
+
+    const { data, error } = await query
       .limit(1)
       .maybeSingle();
 

@@ -16,7 +16,7 @@
  */
 
 const logger = require('./utils/logger');
-const { updatePositionPnL, logTrade, removePosition, savePosition, updatePaperTradeExit } = require('./supabaseClient');
+const { updatePositionPnL, logTrade, removePosition, savePosition, updatePaperTradeExit, savePaperTrade } = require('./supabaseClient');
 const { calculatePositionSize } = require('./utils/calculations');
 
 class PositionUpdater {
@@ -512,8 +512,27 @@ class PositionUpdater {
         exchange: exchangeName,
         notes: 'Manually opened position detected by bot',
       });
+
+      // Also create a paper_trades row so it appears in the Paper Trading Hub
+      const paperTradeId = await savePaperTrade({
+        userId: this.userId,
+        symbol,
+        side,
+        entryPrice,
+        entryTime: new Date().toISOString(),
+        quantity,
+        positionSizeUsd,
+        currentPrice,
+        assetClass,
+        exchange: exchangeName,
+        entryOrderId: null,
+      });
+
+      if (paperTradeId && position) {
+        position.paperTradeId = paperTradeId;
+      }
       
-      logger.info(`✅ Manually opened position ${symbol} registered in Supabase`);
+      logger.info(`✅ Manually opened position ${symbol} registered in Supabase (paper_trade=${paperTradeId || 'none'})`);
     } catch (error) {
       logger.logError(`Error handling manually opened position ${exchangePosition.symbol}`, error);
     }
@@ -600,7 +619,7 @@ class PositionUpdater {
         pnlPercent: unrealizedPnlPercent,
         exitReason,
         orderId: position.orderId,
-        assetClass: 'crypto',
+        assetClass: position.assetClass || (this.api.exchangeName === 'oanda' ? 'forex' : this.api.exchangeName === 'tradier' ? 'stock' : 'crypto'),
         exchange: this.api.exchangeName || 'aster',
       });
 

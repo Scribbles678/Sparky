@@ -1606,6 +1606,15 @@ async function bootstrap() {
     } catch (error) {
       logger.warn('⚠️  Failed to start orphaned position guard:', error.message);
     }
+
+    // Broker Reconciliation: poll broker closed trades and upsert realized P&L
+    try {
+      const { startBrokerReconciliation } = require('./scheduledJobs/brokerReconciliation');
+      startBrokerReconciliation(5 * 60_000); // every 5 minutes
+      logger.info('✅ Broker reconciliation started (runs every 5 min)');
+    } catch (error) {
+      logger.warn('⚠️  Failed to start broker reconciliation:', error.message);
+    }
   });
 }
 
@@ -1682,6 +1691,14 @@ const shutdown = async () => {
     stopOrphanedPositionGuard();
   } catch (error) {
     logger.warn('Failed to stop orphaned position guard', error);
+  }
+
+  // Stop broker reconciliation
+  try {
+    const { stopBrokerReconciliation } = require('./scheduledJobs/brokerReconciliation');
+    stopBrokerReconciliation();
+  } catch (error) {
+    logger.warn('Failed to stop broker reconciliation', error);
   }
 
   if (server) {
