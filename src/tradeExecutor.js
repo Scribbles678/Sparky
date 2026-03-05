@@ -1064,20 +1064,29 @@ class TradeExecutor {
         strategyId: strategyId,
       });
 
-      // Mirror to paper_trades (single source of truth for Paper Trading Hub)
-      const paperTradeId = await savePaperTrade({
-        userId: alertData.userId,
-        symbol,
-        side,
-        entryPrice,
-        entryTime: new Date().toISOString(),
-        quantity: roundedQuantity,
-        positionSizeUsd: finalTradeAmount,
-        currentPrice: entryPrice,
-        assetClass: this.getAssetClass(),
-        exchange: this.exchange,
-        entryOrderId: orderResult.orderId,
-      });
+      // Mirror to paper_trades — but ONLY for direct/manual webhooks.
+      // Trades routed by BrokerExecutionRouter already have a paper_trades row
+      // created by the Unified Simulation Worker; writing another one causes duplicates.
+      const isBrokerRouted = (alertData.source || '').startsWith('broker_sandbox_')
+                          || (alertData.source || '').startsWith('broker_prod_');
+      let paperTradeId = null;
+      if (!isBrokerRouted) {
+        paperTradeId = await savePaperTrade({
+          userId: alertData.userId,
+          symbol,
+          side,
+          entryPrice,
+          entryTime: new Date().toISOString(),
+          quantity: roundedQuantity,
+          positionSizeUsd: finalTradeAmount,
+          currentPrice: entryPrice,
+          assetClass: this.getAssetClass(),
+          exchange: this.exchange,
+          entryOrderId: orderResult.orderId,
+        });
+      } else {
+        logger.info(`Skipping savePaperTrade for broker-routed trade (${alertData.source})`);
+      }
 
       // Store paperTradeId on the tracked position so closePosition can use it
       if (paperTradeId) {

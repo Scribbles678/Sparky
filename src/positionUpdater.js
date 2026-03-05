@@ -513,20 +513,34 @@ class PositionUpdater {
         notes: 'Manually opened position detected by bot',
       });
 
-      // Also create a paper_trades row so it appears in the Paper Trading Hub
-      const paperTradeId = await savePaperTrade({
-        userId: this.userId,
-        symbol,
-        side,
-        entryPrice,
-        entryTime: new Date().toISOString(),
-        quantity,
-        positionSizeUsd,
-        currentPrice,
-        assetClass,
-        exchange: exchangeName,
-        entryOrderId: null,
-      });
+      // Only create a paper_trades row if one doesn't already exist for this symbol.
+      // BrokerExecutionRouter trades already have a row (source_type 'pattern', 'sde', etc.)
+      // with a CCXT-style symbol (e.g. 'ASTER/USDT'), so check both formats.
+      const { getActivePaperTradeBySymbol } = require('./supabaseClient');
+      const ccxtSymbol = symbol.includes('/') ? symbol : symbol.replace('USDT', '/USDT');
+      const existingTrade = await getActivePaperTradeBySymbol(this.userId, symbol)
+                         || await getActivePaperTradeBySymbol(this.userId, ccxtSymbol);
+
+      let paperTradeId = null;
+      if (!existingTrade) {
+        paperTradeId = await savePaperTrade({
+          userId: this.userId,
+          symbol,
+          side,
+          entryPrice,
+          entryTime: new Date().toISOString(),
+          quantity,
+          positionSizeUsd,
+          currentPrice,
+          assetClass,
+          exchange: exchangeName,
+          entryOrderId: null,
+        });
+        logger.info(`Created paper_trade for manually opened position: ${paperTradeId}`);
+      } else {
+        paperTradeId = existingTrade.id;
+        logger.info(`Paper trade already exists for ${symbol} (id: ${existingTrade.id}), skipping duplicate`);
+      }
 
       if (paperTradeId && position) {
         position.paperTradeId = paperTradeId;

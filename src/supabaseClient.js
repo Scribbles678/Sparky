@@ -1088,6 +1088,25 @@ async function testConnection() {
   }
 }
 
+async function getActivePaperTradeBySymbol(userId, symbol) {
+  if (!supabase || !userId || !symbol) return null;
+  try {
+    const { data, error } = await supabase
+      .from('paper_trades')
+      .select('id, symbol, source_type, status')
+      .eq('user_id', userId)
+      .eq('symbol', symbol)
+      .in('status', ['active', 'open'])
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (error || !data || data.length === 0) return null;
+    return data[0];
+  } catch (err) {
+    console.error('getActivePaperTradeBySymbol error:', err.message);
+    return null;
+  }
+}
+
 module.exports = {
   supabase,
   logTrade,
@@ -1110,6 +1129,7 @@ module.exports = {
   logWebhookRequest,
   savePaperTrade,
   updatePaperTradeExit,
+  getActivePaperTradeBySymbol,
   testConnection
 };
 
