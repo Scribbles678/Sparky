@@ -137,13 +137,19 @@ class TradierAPI extends BaseExchangeAPI {
       : [response.positions.position];
     
     // Convert to common format
-    return positions.map(pos => ({
-      symbol: pos.symbol,
-      positionAmt: pos.quantity.toString(),
-      entryPrice: parseFloat(pos.cost_basis) / parseFloat(pos.quantity),
-      markPrice: null, // Will be fetched separately if needed
-      unRealizedProfit: parseFloat((pos.quantity * (pos.last - (pos.cost_basis / pos.quantity))).toFixed(2)),
-    }));
+    // Note: Tradier /positions endpoint does not include a market price field.
+    // markPrice is null here; use getPositionWithPrice() when a live price is needed.
+    return positions.map(pos => {
+      const qty = parseFloat(pos.quantity);
+      const costBasis = parseFloat(pos.cost_basis);
+      return {
+        symbol: pos.symbol,
+        positionAmt: qty.toString(),
+        entryPrice: costBasis / qty,
+        markPrice: null,
+        unRealizedProfit: 0,
+      };
+    });
   }
 
   /**
@@ -162,6 +168,33 @@ class TradierAPI extends BaseExchangeAPI {
   async hasOpenPosition(symbol) {
     const position = await this.getPosition(symbol);
     return position !== null;
+  }
+
+  /**
+   * Get position with live market price populated.
+   * Tradier's /positions endpoint does not include a market price, so this
+   * fetches the position data and a live quote in parallel and merges them.
+   * @param {string} symbol
+   * @returns {Promise<Object|null>} Position with markPrice populated, or null
+   */
+  async getPositionWithPrice(symbol) {
+    const position = await this.getPosition(symbol);
+    if (!position) return null;
+
+    try {
+      const ticker = await this.getTicker(symbol);
+      const lastPrice = parseFloat(ticker.lastPrice || ticker.price);
+      position.markPrice = lastPrice;
+      position.lastPrice = lastPrice;
+
+      const qty = parseFloat(position.positionAmt);
+      const entryPrice = position.entryPrice;
+      position.unRealizedProfit = parseFloat(((lastPrice - entryPrice) * qty).toFixed(2));
+    } catch (err) {
+      logger.logError(`Failed to fetch live price for ${symbol}`, err);
+    }
+
+    return position;
   }
 
   // ==================== Market Data Methods ====================

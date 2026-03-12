@@ -1,12 +1,12 @@
 /**
- * Broker Reconciliation Scheduler
+ * Broker Reconciliation Scheduler — READ-ONLY AUDIT MODE
  *
  * Runs every 5 minutes. For each user with exchange credentials, fetches
- * closed trades from the broker and upserts realized P&L data into
- * paper_trades / production_trades.
+ * closed trades from the broker and COMPARES with internal P&L data.
  *
- * Broker is the source of truth for all exchange-routed trades.
- * This ensures paper_trades.realized_pnl_usd always reflects actual broker fills.
+ * Does NOT overwrite paper_trades or production_trades. Instead, logs
+ * divergences to reconciliation_log for monitoring. The TradeLifecycleManager
+ * is now the single authoritative writer for trade P&L.
  *
  * Supports: tradier (equity), oanda, aster (via CCXT fills)
  */
@@ -121,6 +121,7 @@ function withinTimeWindow(dateA, dateB, windowMinutes) {
 
 async function reconcileUserExchange(userId, exchange, environment, targetTable) {
   const startTime = Date.now();
+  const DIVERGENCE_THRESHOLD_PCT = 2.0;
   const logEntry = {
     broker: exchange,
     environment,
@@ -130,6 +131,7 @@ async function reconcileUserExchange(userId, exchange, environment, targetTable)
     trades_matched: 0,
     trades_updated: 0,
     trades_missing: 0,
+    divergences_detected: 0,
     total_pnl_delta: 0,
     details: {},
     error_message: null,
@@ -153,7 +155,6 @@ async function reconcileUserExchange(userId, exchange, environment, targetTable)
       return logEntry;
     }
 
-    // Fetch internal trades that have this exchange set and are exited/active
     const { data: internalTrades, error: dbError } = await supabase
       .from(targetTable)
       .select('id, symbol, exchange, exchange_order_id, entry_time, exit_time, status, pnl_usd, realized_pnl_usd, quantity, direction, user_id')
@@ -175,35 +176,26 @@ async function reconcileUserExchange(userId, exchange, environment, targetTable)
       internalBySymbol.get(key).push(t);
     }
 
-    const updatedIds = new Set();
+    const matchedIds = new Set();
+    const divergences = [];
 
     for (const brokerTrade of brokerTrades) {
       const brokerSymbol = normalizeSymbol(brokerTrade.symbol);
       const candidates = internalBySymbol.get(brokerSymbol) || [];
 
-      // Find best match: prefer exchange_order_id match, then time-window match
       let bestMatch = null;
       let bestScore = -1;
 
       for (const candidate of candidates) {
-        if (updatedIds.has(candidate.id)) continue;
-
-        // Already has accurate realized data and is closed -- skip
-        if (candidate.realized_pnl_usd != null &&
-            candidate.realized_pnl_usd !== 0 &&
-            candidate.status === 'exited') {
-          continue;
-        }
+        if (matchedIds.has(candidate.id)) continue;
 
         let score = 0;
 
-        // Exchange order ID match (strongest)
         if (brokerTrade.orderId && candidate.exchange_order_id &&
             String(brokerTrade.orderId) === String(candidate.exchange_order_id)) {
           score += 100;
         }
 
-        // Time window match
         const timeField = candidate.exit_time || candidate.entry_time;
         const brokerTime = brokerTrade.close_date || brokerTrade.open_date;
         if (withinTimeWindow(timeField, brokerTime, 48 * 60)) {
@@ -212,7 +204,6 @@ async function reconcileUserExchange(userId, exchange, environment, targetTable)
           score -= 10;
         }
 
-        // Quantity proximity
         const bQty = Math.abs(brokerTrade.quantity || 0);
         const iQty = Math.abs(parseFloat(candidate.quantity || 0));
         if (bQty > 0 && iQty > 0) {
@@ -228,62 +219,40 @@ async function reconcileUserExchange(userId, exchange, environment, targetTable)
 
       if (bestMatch && bestScore >= 10) {
         logEntry.trades_matched++;
+        matchedIds.add(bestMatch.id);
 
         const brokerPnl = parseFloat(brokerTrade.gain_loss || 0);
-        const currentRealized = parseFloat(bestMatch.realized_pnl_usd || 0);
-        const currentPaper = parseFloat(bestMatch.pnl_usd || 0);
+        const internalPnl = parseFloat(bestMatch.realized_pnl_usd || bestMatch.pnl_usd || 0);
+        const pnlDelta = brokerPnl - internalPnl;
+        const denominator = Math.abs(internalPnl) > 0.01 ? Math.abs(internalPnl) : 1;
+        const divergencePct = Math.abs(pnlDelta / denominator) * 100;
 
-        const needsUpdate =
-          (currentRealized === 0 || currentRealized == null) ||
-          bestMatch.status === 'active';
+        if (divergencePct > DIVERGENCE_THRESHOLD_PCT && Math.abs(pnlDelta) > 0.50) {
+          logEntry.divergences_detected++;
+          divergences.push({
+            paper_trade_id: bestMatch.id,
+            symbol: bestMatch.symbol,
+            internal_pnl: internalPnl,
+            broker_pnl: brokerPnl,
+            delta: Math.round(pnlDelta * 100) / 100,
+            divergence_pct: Math.round(divergencePct * 100) / 100,
+          });
 
-        if (needsUpdate) {
-          const updatePayload = {
-            realized_pnl_usd: brokerPnl,
-            realized_pnl_pct: parseFloat(brokerTrade.gain_loss_percent || 0),
-            order_status: 'filled',
-            updated_at: new Date().toISOString(),
-          };
-
-          // If the trade is still active in our DB but broker shows it closed, close it
-          if (bestMatch.status === 'active' && brokerTrade.close_date) {
-            updatePayload.status = 'exited';
-            updatePayload.exit_time = brokerTrade.close_date;
-            updatePayload.exit_reason = 'broker_reconciled';
-          }
-
-          // Calculate fees if we have cost/proceeds data
-          if (brokerTrade.cost != null && brokerTrade.proceeds != null) {
-            const rawPnl = brokerTrade.proceeds - brokerTrade.cost;
-            const fees = Math.abs(rawPnl - brokerPnl);
-            if (fees > 0.001) {
-              updatePayload.exchange_fees_usd = Math.round(fees * 100) / 100;
-              updatePayload.net_pnl_usd = brokerPnl;
-            }
-          }
-
-          if (!updatePayload.net_pnl_usd) {
-            updatePayload.net_pnl_usd = brokerPnl;
-          }
-
-          const { error: updateError } = await supabase
-            .from(targetTable)
-            .update(updatePayload)
-            .eq('id', bestMatch.id);
-
-          if (!updateError) {
-            logEntry.trades_updated++;
-            logEntry.total_pnl_delta += brokerPnl - (currentPaper || 0);
-            updatedIds.add(bestMatch.id);
-          } else {
-            logger.warn(`${LOG_PREFIX} Failed to update ${bestMatch.id}: ${updateError.message}`);
-          }
-        } else {
-          updatedIds.add(bestMatch.id);
+          logger.warn(
+            `${LOG_PREFIX} DIVERGENCE: ${bestMatch.symbol} (${bestMatch.id}) ` +
+            `internal=$${internalPnl.toFixed(2)} broker=$${brokerPnl.toFixed(2)} ` +
+            `delta=$${pnlDelta.toFixed(2)} (${divergencePct.toFixed(1)}%)`
+          );
         }
+
+        logEntry.total_pnl_delta += pnlDelta;
       } else {
         logEntry.trades_missing++;
       }
+    }
+
+    if (divergences.length > 0) {
+      logEntry.details = { divergences };
     }
 
     logEntry.total_pnl_delta = Math.round(logEntry.total_pnl_delta * 100) / 100;
@@ -343,14 +312,14 @@ async function runReconciliation() {
         targetTable,
       );
 
-      totalUpdated += result.trades_updated;
+      totalUpdated += result.divergences_detected || 0;
       logEntries.push(result);
 
-      if (result.trades_updated > 0) {
+      if (result.trades_matched > 0 || result.divergences_detected > 0) {
         logger.info(
           `${LOG_PREFIX} ${pair.exchange}/${pair.environment}: ` +
           `checked=${result.trades_checked} matched=${result.trades_matched} ` +
-          `updated=${result.trades_updated} missing=${result.trades_missing} ` +
+          `divergences=${result.divergences_detected || 0} missing=${result.trades_missing} ` +
           `pnl_delta=$${result.total_pnl_delta}`
         );
       }
@@ -379,9 +348,9 @@ async function runReconciliation() {
     }
 
     if (totalUpdated > 0) {
-      logger.info(`${LOG_PREFIX} Reconciliation complete: ${totalUpdated} trade(s) updated across all exchanges`);
+      logger.info(`${LOG_PREFIX} Audit complete: ${totalUpdated} divergence(s) detected across all exchanges`);
     } else {
-      logger.debug(`${LOG_PREFIX} Reconciliation complete: no updates needed`);
+      logger.debug(`${LOG_PREFIX} Audit complete: no divergences found`);
     }
   } catch (err) {
     logger.error(`${LOG_PREFIX} Unexpected error in runReconciliation: ${err.message}`);

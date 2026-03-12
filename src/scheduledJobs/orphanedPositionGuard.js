@@ -24,7 +24,8 @@
 const { createClient } = require('@supabase/supabase-js');
 const logger = require('../utils/logger');
 const ExchangeFactory = require('../exchanges/ExchangeFactory');
-const { updatePaperTradeExit, removePosition } = require('../supabaseClient');
+const { removePosition } = require('../supabaseClient');
+const TradeLifecycleManager = require('../tradeLifecycleManager');
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -187,29 +188,33 @@ async function processUserExchange(row) {
     try {
       const closeResult = await closePositionAtMarket(api, position, symbol, longPosition);
       orphanFirstSeen.delete(orphanKey);
-      logger.info(`[OrphanGuard] ✅ Closed orphaned position: ${symbol} for user=${user_id}`);
+      logger.info(`[OrphanGuard] Closed orphaned position: ${symbol} for user=${user_id}`);
 
-      // Update paper_trades and remove position from DB
-      const exitPrice = parseFloat(closeResult?.price || closeResult?.avg_fill_price || position.cost_basis / (parseFloat(position.quantity) || 1) || 0);
       const entryPrice = parseFloat(position.cost_basis || 0) / Math.abs(parseFloat(position.quantity || 1));
       const qty = Math.abs(parseFloat(position.quantity || 0));
-      const pnlUsd = longPosition
-        ? (exitPrice - entryPrice) * qty
-        : (entryPrice - exitPrice) * qty;
-      const pnlPct = entryPrice > 0 ? ((exitPrice - entryPrice) / entryPrice) * 100 * (longPosition ? 1 : -1) : 0;
+      const rawExitPrice = parseFloat(closeResult?.price || closeResult?.avg_fill_price || 0);
 
+      const lifecycle = new TradeLifecycleManager(api, {}, exchange);
       try {
-        await updatePaperTradeExit({
-          userId: user_id,
+        await lifecycle.closeTrade({
           symbol,
-          exitPrice,
-          exitTime: new Date().toISOString(),
+          side: longPosition ? 'BUY' : 'SELL',
+          entryPrice,
+          exitPrice: rawExitPrice,
+          quantity: qty,
+          positionSizeUsd: null,
+          userId: user_id,
+          paperTradeId: null,
+          orderId: null,
           exitReason: 'orphan_guard',
-          pnlUsd: Math.round(pnlUsd * 100) / 100,
-          pnlPercent: Math.round(pnlPct * 100) / 100,
+          assetClass: exchange.startsWith('tradier') ? 'stocks' : 'crypto',
+          exchange,
+          strategyId: null,
+          entryTime: null,
+          source: '',
         });
-      } catch (dbErr) {
-        logger.warn(`[OrphanGuard] Failed to update paper_trade for ${symbol}: ${dbErr.message}`);
+      } catch (lcErr) {
+        logger.warn(`[OrphanGuard] Lifecycle closeTrade failed for ${symbol}: ${lcErr.message}`);
       }
 
       try {

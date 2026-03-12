@@ -12,9 +12,9 @@ const {
   savePosition,
   removePosition,
   savePaperTrade,
-  updatePaperTradeExit,
 } = require('./supabaseClient');
 const StrategyManager = require('./strategyManager');
+const TradeLifecycleManager = require('./tradeLifecycleManager');
 const {
   notifyTradeSuccess,
   notifyTradeFailed,
@@ -37,6 +37,7 @@ class TradeExecutor {
     this.strategyManager = new StrategyManager();
     // Determine exchange name: explicit > from API instance > default
     this.exchange = exchangeName || exchangeApi.exchangeName || exchangeApi.getExchangeName?.() || 'aster';
+    this.lifecycleManager = new TradeLifecycleManager(exchangeApi, config, this.exchange);
   }
 
   /**
@@ -1068,7 +1069,8 @@ class TradeExecutor {
       // Trades routed by BrokerExecutionRouter already have a paper_trades row
       // created by the Unified Simulation Worker; writing another one causes duplicates.
       const isBrokerRouted = (alertData.source || '').startsWith('broker_sandbox_')
-                          || (alertData.source || '').startsWith('broker_prod_');
+                          || (alertData.source || '').startsWith('broker_prod_')
+                          || (alertData.source || '').startsWith('netting_');
       let paperTradeId = null;
       if (!isBrokerRouted) {
         paperTradeId = await savePaperTrade({
@@ -1083,6 +1085,9 @@ class TradeExecutor {
           assetClass: this.getAssetClass(),
           exchange: this.exchange,
           entryOrderId: orderResult.orderId,
+          sourceType: alertData.strategy || alertData.source || 'webhook',
+          tradeType: alertData.strategy || 'webhook',
+          sourceId: alertData.strategy_id || null,
         });
       } else {
         logger.info(`Skipping savePaperTrade for broker-routed trade (${alertData.source})`);
@@ -1091,7 +1096,10 @@ class TradeExecutor {
       // Store paperTradeId on the tracked position so closePosition can use it
       if (paperTradeId) {
         const trackedPos = this.tracker.getPosition(symbol, this.exchange);
-        if (trackedPos) trackedPos.paperTradeId = paperTradeId;
+        if (trackedPos) {
+          trackedPos.paperTradeId = paperTradeId;
+          trackedPos.alertSource = alertData.source || '';
+        }
       }
 
       logger.info(`Position opened successfully for ${symbol}`);
@@ -1206,39 +1214,19 @@ class TradeExecutor {
       }
       
       const side = positionAmt > 0 ? 'SELL' : 'BUY'; // Opposite side to close
-      
-      // Get entry price and calculate exit price
-      const entryPrice = parseFloat(exchangePosition.entryPrice);
-      const exitPrice = parseFloat(exchangePosition.markPrice || exchangePosition.lastPrice || 0);
-      
-      // Calculate trade amount for this exchange
-      const exchangeConfig = this.config[this.exchange] || {};
-      const exchangeTradeAmount = exchangeConfig.tradeAmount || 600;
-      const positionMultiplier = exchangeConfig.positionMultiplier || 1.0;
-      const finalTradeAmount = exchangeTradeAmount * positionMultiplier;
-      
-      // Calculate P&L
       const positionSide = positionAmt > 0 ? 'BUY' : 'SELL';
-      let pnlUsd = 0;
       
-      if (positionSide === 'BUY') {
-        // Long position: profit if price went up
-        pnlUsd = (exitPrice - entryPrice) * quantity;
-      } else {
-        // Short position: profit if price went down
-        pnlUsd = (entryPrice - exitPrice) * quantity;
-      }
-      
-      const pnlPercent = (pnlUsd / finalTradeAmount) * 100;
+      // Get entry price — exit price will be verified by lifecycle manager
+      const entryPrice = parseFloat(exchangePosition.entryPrice);
+      const rawExitPrice = parseFloat(exchangePosition.markPrice || exchangePosition.lastPrice || 0);
 
-      // Close the position
+      // Close the position on the exchange
       const closeResult = await this.api.closePosition(symbol, side, quantity);
 
       logger.logTrade('closed', symbol, {
         orderId: closeResult.orderId,
         quantity,
         side,
-        pnl: `$${pnlUsd.toFixed(2)} (${pnlPercent.toFixed(2)}%)`,
       });
 
       // Cancel stop loss and take profit orders if they exist
@@ -1275,59 +1263,45 @@ class TradeExecutor {
         }
       }
 
-      // Log completed trade to database
+      // Delegate P&L computation and DB writes to the lifecycle manager
+      let pnlUsd = 0;
+      let pnlPercent = 0;
+
       if (trackedPosition) {
-        // Calculate trade amount for this exchange
-        const exchangeConfig = this.config[this.exchange] || {};
-        const exchangeTradeAmount = exchangeConfig.tradeAmount || 600;
-        const positionMultiplier = exchangeConfig.positionMultiplier || 1.0;
-        const finalTradeAmount = exchangeTradeAmount * positionMultiplier;
-        
-        // Get strategy ID if strategy is provided
         let strategyId = null;
         if (strategy) {
           const strategyInfo = this.strategyManager.getStrategy(strategy);
           strategyId = strategyInfo?.id || null;
         }
 
-        const tradeResult = await logTrade({
-          // MULTI-TENANT: user_id is REQUIRED for dashboard visibility
-          userId: userId,
-          symbol,
-          side: positionSide,
-          entryPrice: trackedPosition.entryPrice || entryPrice,
-          entryTime: trackedPosition.timestamp ? new Date(trackedPosition.timestamp).toISOString() : new Date().toISOString(),
-          exitPrice,
-          exitTime: new Date().toISOString(),
-          quantity,
-          positionSizeUsd: finalTradeAmount,
-          stopLossPrice: trackedPosition.stopLossPercent ? calculateStopLoss(positionSide, entryPrice, trackedPosition.stopLossPercent) : null,
-          takeProfitPrice: trackedPosition.takeProfitPercent ? calculateTakeProfit(positionSide, entryPrice, trackedPosition.takeProfitPercent) : null,
-          stopLossPercent: trackedPosition.stopLossPercent,
-          takeProfitPercent: trackedPosition.takeProfitPercent,
-          pnlUsd,
-          pnlPercent,
-          orderId: closeResult.orderId,
-          exitReason: 'MANUAL', // You can enhance this later to detect SL/TP hits
-          // REQUIRED for SignalStudio dashboard integration
-          assetClass: this.getAssetClass(), // Dynamic based on exchange
-          exchange: this.exchange,
-          strategyId: strategyId,
-        });
+        const alertSource = trackedPosition.alertSource || '';
 
-        // Mirror exit to paper_trades
-        await updatePaperTradeExit({
-          userId,
-          symbol,
-          orderId: trackedPosition.orderId,
-          paperTradeId: trackedPosition.paperTradeId || null,
-          entryTime: trackedPosition.timestamp ? new Date(trackedPosition.timestamp).toISOString() : null,
-          exitPrice,
-          exitTime: new Date().toISOString(),
-          exitReason: 'MANUAL',
-          pnlUsd,
-          pnlPercent,
-        });
+        try {
+          const result = await this.lifecycleManager.closeTrade({
+            symbol,
+            side: positionSide,
+            entryPrice: trackedPosition.entryPrice || entryPrice,
+            exitPrice: rawExitPrice,
+            quantity,
+            positionSizeUsd: null,
+            userId,
+            paperTradeId: trackedPosition.paperTradeId || null,
+            orderId: closeResult.orderId,
+            exitReason: 'MANUAL',
+            assetClass: this.getAssetClass(),
+            exchange: this.exchange,
+            strategyId,
+            entryTime: trackedPosition.timestamp
+              ? new Date(trackedPosition.timestamp).toISOString()
+              : null,
+            source: alertSource,
+          });
+
+          pnlUsd = result.pnlUsd;
+          pnlPercent = result.pnlPercent;
+        } catch (lifecycleErr) {
+          logger.logError(`[LIFECYCLE] closeTrade failed for ${symbol}`, lifecycleErr);
+        }
 
         // Update strategy performance metrics
         if (strategy) {

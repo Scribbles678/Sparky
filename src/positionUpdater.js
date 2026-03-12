@@ -16,8 +16,9 @@
  */
 
 const logger = require('./utils/logger');
-const { updatePositionPnL, logTrade, removePosition, savePosition, updatePaperTradeExit, savePaperTrade } = require('./supabaseClient');
+const { updatePositionPnL, logTrade, removePosition, savePosition, savePaperTrade } = require('./supabaseClient');
 const { calculatePositionSize } = require('./utils/calculations');
+const TradeLifecycleManager = require('./tradeLifecycleManager');
 
 class PositionUpdater {
   constructor(asterApi, positionTracker, config, userId = null) {
@@ -36,6 +37,10 @@ class PositionUpdater {
     this.latestPrices = new Map();  // symbol → { price, timestamp } from WebSocket
     this.wsReconcileMs = 300000;    // REST reconciliation interval in WS mode (5 min)
     this.wsReconcileTimer = null;
+
+    // Trade lifecycle manager for authoritative exit writes
+    const exchangeName = asterApi.exchangeName || 'aster';
+    this.lifecycleManager = new TradeLifecycleManager(asterApi, config, exchangeName);
   }
 
   /**
@@ -535,6 +540,8 @@ class PositionUpdater {
           assetClass,
           exchange: exchangeName,
           entryOrderId: null,
+          sourceType: 'manual',
+          tradeType: 'manual',
         });
         logger.info(`Created paper_trade for manually opened position: ${paperTradeId}`);
       } else {
@@ -559,117 +566,92 @@ class PositionUpdater {
     try {
       logger.info(`Position ${position.symbol} was closed on exchange (likely TP/SL hit)`);
       
-      // Get final price from ticker
-      const ticker = await this.api.getTicker(position.symbol);
-      const exitPrice = parseFloat(ticker.lastPrice || ticker.price);
-      
-      // Calculate final P&L
-      const { unrealizedPnlUsd, unrealizedPnlPercent } = this.calculateUnrealizedPnL(
-        position,
-        exitPrice
-      );
+      // Get final price from ticker (lifecycle manager will verify)
+      let rawExitPrice = 0;
+      try {
+        const ticker = await this.api.getTicker(position.symbol);
+        rawExitPrice = parseFloat(ticker.lastPrice || ticker.price);
+      } catch (err) {
+        logger.logError(`Failed to fetch ticker for closed position ${position.symbol}`, err);
+      }
       
       // Determine exit reason (check if close to TP or SL first)
       let exitReason = 'AUTO_CLOSED';
       
-      // Check if closed near stop loss
       if (position.stopLossPercent) {
         const slPrice = position.side === 'BUY' 
           ? position.entryPrice * (1 - position.stopLossPercent / 100)
           : position.entryPrice * (1 + position.stopLossPercent / 100);
         
-        const slDiff = Math.abs(exitPrice - slPrice) / slPrice;
-        if (slDiff < 0.01) { // Within 1% of SL price
+        const slDiff = Math.abs(rawExitPrice - slPrice) / slPrice;
+        if (slDiff < 0.01) {
           exitReason = 'STOP_LOSS';
         }
       }
       
-      // Check if closed near take profit (only if not already marked as SL)
       if (position.takeProfitPercent && exitReason === 'AUTO_CLOSED') {
         const tpPrice = position.side === 'BUY'
           ? position.entryPrice * (1 + position.takeProfitPercent / 100)
           : position.entryPrice * (1 - position.takeProfitPercent / 100);
         
-        const tpDiff = Math.abs(exitPrice - tpPrice) / tpPrice;
-        if (tpDiff < 0.01) { // Within 1% of TP price
+        const tpDiff = Math.abs(rawExitPrice - tpPrice) / tpPrice;
+        if (tpDiff < 0.01) {
           exitReason = 'TAKE_PROFIT';
         }
       }
       
-      // If not TP/SL and was manually opened, mark as manual
       if (exitReason === 'AUTO_CLOSED' && position.manuallyOpened) {
         exitReason = 'MANUAL';
       }
       
-      // Log to database
-      // Ensure timestamp is valid - use current time if missing
       const entryTime = position.timestamp 
         ? new Date(position.timestamp).toISOString() 
         : new Date().toISOString();
-      
-      await logTrade({
-        userId: this.userId,
-        symbol: position.symbol,
-        side: position.side,
-        entryPrice: position.entryPrice,
-        entryTime,
-        exitPrice,
-        exitTime: new Date().toISOString(),
-        quantity: position.quantity,
-        positionSizeUsd: this.getExchangeTradeAmount(),
-        stopLossPrice: position.stopLossPercent 
-          ? (position.side === 'BUY' 
-              ? position.entryPrice * (1 - position.stopLossPercent / 100)
-              : position.entryPrice * (1 + position.stopLossPercent / 100))
-          : null,
-        takeProfitPrice: position.takeProfitPercent
-          ? (position.side === 'BUY'
-              ? position.entryPrice * (1 + position.takeProfitPercent / 100)
-              : position.entryPrice * (1 - position.takeProfitPercent / 100))
-          : null,
-        stopLossPercent: position.stopLossPercent,
-        takeProfitPercent: position.takeProfitPercent,
-        pnlUsd: unrealizedPnlUsd,
-        pnlPercent: unrealizedPnlPercent,
-        exitReason,
-        orderId: position.orderId,
-        assetClass: position.assetClass || (this.api.exchangeName === 'oanda' ? 'forex' : this.api.exchangeName === 'tradier' ? 'stock' : 'crypto'),
-        exchange: this.api.exchangeName || 'aster',
-      });
 
-      // Mirror exit to paper_trades (keeps Paper Trading Hub in sync)
-      await updatePaperTradeExit({
-        userId: this.userId,
-        symbol: position.symbol,
-        orderId: position.orderId,
-        paperTradeId: position.paperTradeId || null,
-        entryTime,
-        exitPrice,
-        exitTime: new Date().toISOString(),
-        exitReason,
-        pnlUsd: unrealizedPnlUsd,
-        pnlPercent: unrealizedPnlPercent,
-      });
+      let pnlUsd = 0;
+      let pnlPercent = 0;
+
+      try {
+        const result = await this.lifecycleManager.closeTrade({
+          symbol: position.symbol,
+          side: position.side,
+          entryPrice: position.entryPrice,
+          exitPrice: rawExitPrice,
+          quantity: position.quantity,
+          positionSizeUsd: null,
+          userId: this.userId,
+          paperTradeId: position.paperTradeId || null,
+          orderId: position.orderId,
+          exitReason,
+          assetClass: position.assetClass || (this.api.exchangeName === 'oanda' ? 'forex' : this.api.exchangeName === 'tradier' ? 'stocks' : 'crypto'),
+          exchange: this.api.exchangeName || 'aster',
+          strategyId: null,
+          entryTime,
+          source: position.alertSource || '',
+        });
+
+        pnlUsd = result.pnlUsd;
+        pnlPercent = result.pnlPercent;
+      } catch (lifecycleErr) {
+        logger.logError(`[LIFECYCLE] closeTrade failed for ${position.symbol}`, lifecycleErr);
+      }
       
       // Cancel remaining bracket orders (TP or SL that didn't trigger)
-      // When exchange TP/SL fills, the other side is still open and must be cleaned up
       if (this.api.cancelAllOrders) {
         try {
           await this.api.cancelAllOrders(position.symbol);
-          logger.info(`🧹 Cancelled remaining open orders for ${position.symbol} (bracket cleanup)`);
+          logger.info(`Cancelled remaining open orders for ${position.symbol} (bracket cleanup)`);
         } catch (cancelErr) {
-          // Not critical — the order may have already been cancelled or expired
           logger.debug(`Could not cancel remaining orders for ${position.symbol}: ${cancelErr.message}`);
         }
       }
       
       await removePosition(position.symbol, this.userId);
       
-      // Remove from tracker (use exchange if available)
       const exchange = position.exchange || this.api.exchangeName || 'aster';
       this.tracker.removePosition(position.symbol, exchange);
       
-      logger.info(`✅ ${position.symbol} closed: ${exitReason}, P&L: $${unrealizedPnlUsd.toFixed(2)} (${unrealizedPnlPercent.toFixed(2)}%)`);
+      logger.info(`${position.symbol} closed: ${exitReason}, P&L: $${pnlUsd.toFixed(2)} (${pnlPercent.toFixed(2)}%)`);
     } catch (error) {
       logger.logError(`Error handling closed position ${position.symbol}`, error);
     }

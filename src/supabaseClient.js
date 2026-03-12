@@ -894,11 +894,14 @@ async function savePaperTrade(position) {
   }
 
   try {
+    const sourceType = position.sourceType || 'manual';
+    const tradeType = position.tradeType || sourceType;
+
     const { data, error } = await supabase
       .from('paper_trades')
       .insert([{
-        source_type: 'sparky',
-        source_id: null,
+        source_type: sourceType,
+        source_id: position.sourceId || null,
         symbol: position.symbol,
         asset_class: position.assetClass || 'crypto',
         direction: position.side,
@@ -914,7 +917,7 @@ async function savePaperTrade(position) {
         mode: 'paper',
         auto_executed: true,
         primary_exit_strategy_id: 'default',
-        trade_type: 'sparky',
+        trade_type: tradeType,
       }])
       .select('id')
       .single();
