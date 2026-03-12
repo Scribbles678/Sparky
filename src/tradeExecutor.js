@@ -1068,6 +1068,8 @@ class TradeExecutor {
       // Mirror to paper_trades — but ONLY for direct/manual webhooks.
       // Trades routed by BrokerExecutionRouter already have a paper_trades row
       // created by the Unified Simulation Worker; writing another one causes duplicates.
+      // BrokerExecutionRouter sends source: 'broker_sandbox_{source_type}' or 'broker_prod_{source_type}'.
+      // NettingEngine sends source: 'netting_{source_type}'.
       const isBrokerRouted = (alertData.source || '').startsWith('broker_sandbox_')
                           || (alertData.source || '').startsWith('broker_prod_')
                           || (alertData.source || '').startsWith('netting_');
@@ -1085,7 +1087,7 @@ class TradeExecutor {
           assetClass: this.getAssetClass(),
           exchange: this.exchange,
           entryOrderId: orderResult.orderId,
-          sourceType: alertData.strategy || alertData.source || 'webhook',
+          sourceType: alertData.strategy || (alertData.source && alertData.source !== 'sparky' ? alertData.source : null) || 'webhook',
           tradeType: alertData.strategy || 'webhook',
           sourceId: alertData.strategy_id || null,
         });
