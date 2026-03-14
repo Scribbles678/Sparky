@@ -453,13 +453,21 @@ class ExchangeFactory {
    * @param {string} [environment='production'] - 'production' or 'testnet'
    * @returns {Promise<object|null>} Exchange API instance or null if credentials not found
    */
-  static async createExchangeForUser(userId, exchangeName, environment = 'production') {
+  static async createExchangeForUser(userId, exchangeName, environment = 'production', credentialId = null) {
     const name = exchangeName.toLowerCase();
-    
-    logger.info(`🔐 Loading ${name} credentials for user ${userId} (${environment})...`);
-    
-    // Fetch user's credentials from Supabase (SignalStudio is source of truth)
-    const credentials = await getUserExchangeCredentials(userId, name, environment);
+
+    logger.info(`🔐 Loading ${name} credentials for user ${userId} (${environment})${credentialId ? ` credId=${credentialId}` : ''}...`);
+
+    // If a specific credential ID is provided, load that exact credential
+    // (used by credential isolation — each signal source has its own API key)
+    let credentials;
+    if (credentialId) {
+      const { getCredentialById } = require('../supabaseClient');
+      credentials = await getCredentialById(credentialId);
+    } else {
+      // Fetch user's credentials from Supabase (SignalStudio is source of truth)
+      credentials = await getUserExchangeCredentials(userId, name, environment);
+    }
     
     if (!credentials) {
       logger.error(`❌ No ${name} credentials found for user ${userId}`);

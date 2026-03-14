@@ -662,10 +662,68 @@ async function fetchCredentialsFromDb(userId, exchange, environment = 'productio
 }
 
 /**
+ * Fetch a specific credential by its UUID.
+ * Used by ExitManager/ProtectionOrders when credential isolation requires
+ * loading a specific API key (not just "first match for exchange").
+ *
+ * @param {string} credentialId - UUID of the bot_credentials row
+ * @returns {Promise<Object|null>} - Credentials object or null if not found
+ */
+async function getCredentialById(credentialId) {
+  if (!supabase) {
+    console.error('❌ Supabase not configured, cannot fetch credential by ID');
+    return null;
+  }
+  if (!credentialId) {
+    console.error('❌ credentialId is required');
+    return null;
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('bot_credentials')
+      .select('*')
+      .eq('id', credentialId)
+      .maybeSingle();
+
+    if (error) {
+      console.error(`❌ Error fetching credential ${credentialId}:`, error);
+      return null;
+    }
+    if (!data) {
+      console.warn(`⚠️ No credential found for id ${credentialId}`);
+      return null;
+    }
+
+    const extraConfig = data.extra_config || {};
+    const extraMetadata = data.extra_metadata || {};
+    const mergedExtra = { ...extraConfig, ...extraMetadata };
+    const apiVersion = mergedExtra.api_version || 'v1';
+    console.log(`✅ Loaded credential ${credentialId} (${data.exchange}, label: ${data.label || 'default'}, version: ${apiVersion})`);
+
+    return {
+      userId: data.user_id,
+      exchange: data.exchange,
+      label: data.label,
+      apiKey: data.api_key,
+      apiSecret: data.api_secret,
+      accountId: data.account_id,
+      accessToken: data.access_token,
+      environment: data.environment,
+      extra: mergedExtra,
+      extra_metadata: extraMetadata,
+    };
+  } catch (error) {
+    console.error(`❌ Exception fetching credential ${credentialId}:`, error);
+    return null;
+  }
+}
+
+/**
  * Fetch exchange credentials by environment (without requiring userId).
  * Used for loading testnet credentials when no specific user is known.
  * Returns the first matching credential found.
- * 
+ *
  * @param {string} exchange - Exchange name (e.g., 'aster')
  * @param {string} environment - Environment ('testnet', 'production', etc.)
  * @returns {Promise<Object|null>} - Credentials object or null if not found
@@ -1121,6 +1179,7 @@ module.exports = {
   getExchangeTradeSettings,
   getBotCredentials,
   getUserExchangeCredentials,  // NEW: Per-user credential loading for multi-tenant
+  getCredentialById,  // Load a specific credential by UUID (credential isolation)
   getExchangeCredentialsByEnvironment,  // Fetch credentials by environment (no userId required)
   validateWebhookSecret,
   validateWebhookSecretFromDb,

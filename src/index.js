@@ -890,13 +890,17 @@ app.post('/orders/exchange/cancel', async (req, res) => {
   }
 });
 
+// ==================== Protection Orders (ExitManager) ====================
+const protectionOrdersRouter = require('./routes/protectionOrders');
+app.use('/orders/protection', protectionOrdersRouter);
+
 /**
  * TradingView webhook endpoint
- * 
+ *
  * NOTE: This endpoint now receives pre-built orders from SignalStudio.
  * SignalStudio handles strategy configuration lookup and order building.
  * This bot just validates and executes the order.
- * 
+ *
  * Still supports direct webhooks for backward compatibility.
  */
 app.post('/webhook', webhookLimiter, async (req, res) => {
