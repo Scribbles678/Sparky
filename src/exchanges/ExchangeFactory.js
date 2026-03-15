@@ -524,10 +524,13 @@ class ExchangeFactory {
           };
         }
         // Legacy V1/V2 credentials (HMAC auth)
+        const isLegacyTestnet = credentials.environment === 'testnet' || credentials.environment === 'sandbox';
         return {
           apiKey: credentials.apiKey,
           apiSecret: credentials.apiSecret,
-          apiUrl: asterExtra.apiUrl || 'https://fapi.asterdex.com',
+          apiUrl: asterExtra.apiUrl || (isLegacyTestnet
+            ? 'https://fapi.asterdex-testnet.com'
+            : 'https://fapi.asterdex.com'),
         };
       }
       
