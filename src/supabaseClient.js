@@ -622,36 +622,38 @@ async function fetchCredentialsFromDb(userId, exchange, environment = 'productio
       .eq('user_id', userId)
       .eq('exchange', exchange)
       .eq('environment', dbEnvironment)
-      .maybeSingle();
+      .limit(1);
 
     if (error) {
       console.error(`❌ Error fetching ${exchange} credentials for user ${userId}:`, error);
       return null;
     }
 
-    if (!data) {
+    if (!data || data.length === 0) {
       console.warn(`⚠️ No ${exchange} credentials found for user ${userId}`);
       return null;
     }
 
+    const row = data[0];
+
     // Merge extra_config and extra_metadata (extra_metadata takes precedence)
-    const extraConfig = data.extra_config || {};
-    const extraMetadata = data.extra_metadata || {};
+    const extraConfig = row.extra_config || {};
+    const extraMetadata = row.extra_metadata || {};
     const mergedExtra = { ...extraConfig, ...extraMetadata };
-    
+
     const apiVersion = mergedExtra.api_version || 'v1';
-    console.log(`✅ Loaded ${exchange} credentials for user ${userId} (label: ${data.label || 'default'}, version: ${apiVersion})`);
-    
+    console.log(`✅ Loaded ${exchange} credentials for user ${userId} (label: ${row.label || 'default'}, version: ${apiVersion})`);
+
     return {
-      userId: data.user_id,
-      exchange: data.exchange,
-      label: data.label,
-      apiKey: data.api_key,
-      apiSecret: data.api_secret,
+      userId: row.user_id,
+      exchange: row.exchange,
+      label: row.label,
+      apiKey: row.api_key,
+      apiSecret: row.api_secret,
       // Additional fields that might be needed for specific exchanges
-      accountId: data.account_id,
-      accessToken: data.access_token,
-      environment: data.environment,
+      accountId: row.account_id,
+      accessToken: row.access_token,
+      environment: row.environment,
       extra: mergedExtra,
       extra_metadata: extraMetadata,
     };
