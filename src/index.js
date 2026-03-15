@@ -1406,8 +1406,7 @@ async function bootstrap() {
   WEBHOOK_SECRET = config.webhookSecret || process.env.WEBHOOK_SECRET || WEBHOOK_SECRET;
 
   if (!WEBHOOK_SECRET) {
-    logger.error('Missing WEBHOOK_SECRET. Configure it via TradeFI or the WEBHOOK_SECRET env variable.');
-    process.exit(1);
+    logger.warn('⚠️ No global WEBHOOK_SECRET configured. Per-user webhook secrets from bot_credentials will be used.');
   }
 
   // =========================================================================
