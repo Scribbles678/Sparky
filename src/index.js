@@ -1220,8 +1220,9 @@ app.post('/webhook', webhookLimiter, async (req, res) => {
       // MULTI-TENANT: Load user's exchange credentials from Supabase
       // Support testnet environment from Signal Monitor webhook payload
       const environment = alertData.environment || 'production';
-      logger.info(`🔐 Loading ${exchange} credentials for user ${userId} (${environment})...`);
-      exchangeApi = await ExchangeFactory.createExchangeForUser(userId, exchange, environment);
+      const credentialId = alertData.linked_exchange_id || null;
+      logger.info(`🔐 Loading ${exchange} credentials for user ${userId} (${environment})${credentialId ? ` [credential: ${credentialId}]` : ''}...`);
+      exchangeApi = await ExchangeFactory.createExchangeForUser(userId, exchange, environment, credentialId);
       
       if (!exchangeApi) {
         // Send notification about missing credentials
