@@ -403,8 +403,9 @@ app.get('/balance/testnet', async (req, res) => {
 
     // Try user-specific credential first, then fall back to environment-based lookup
     const userId = req.query.userId;
+    const credentialId = req.query.credentialId || null;
     if (userId) {
-      api = await ExchangeFactory.createExchangeForUser(userId, 'aster', 'testnet');
+      api = await ExchangeFactory.createExchangeForUser(userId, 'aster', 'testnet', credentialId);
     } else {
       const { getExchangeCredentialsByEnvironment } = require('./supabaseClient');
       const testnetCreds = await getExchangeCredentialsByEnvironment('aster', 'testnet');
@@ -591,7 +592,7 @@ app.post('/positions/close', async (req, res) => {
     
     if (env === 'testnet') {
       if (userId) {
-        api = await ExchangeFactory.createExchangeForUser(userId, 'aster', 'testnet');
+        api = await ExchangeFactory.createExchangeForUser(userId, 'aster', 'testnet', linked_exchange_id);
       } else {
         const { getExchangeCredentialsByEnvironment } = require('./supabaseClient');
         const testnetCreds = await getExchangeCredentialsByEnvironment('aster', 'testnet');
