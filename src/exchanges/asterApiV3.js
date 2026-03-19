@@ -88,10 +88,49 @@ class AsterAPIV3 {
       this.signerAddress = this.wallet.address;
     }
 
+    // Symbol precision cache from exchangeInfo
+    this._symbolPrecisionCache = {};
+    this._exchangeInfoFetchedAt = 0;
+
     logger.info(`🔐 Aster V3 API initialized (${this.environment})`);
     logger.info(`   User: ${this.userAddress}`);
     logger.info(`   Signer: ${this.signerAddress}`);
     logger.info(`   API URL: ${this.apiUrl}`);
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // SYMBOL PRECISION
+  // ════════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Load symbol precision from exchangeInfo (cached 24h)
+   */
+  async _loadSymbolPrecision(symbol) {
+    const CACHE_TTL = 24 * 60 * 60 * 1000;
+    if (Date.now() - this._exchangeInfoFetchedAt > CACHE_TTL || !this._symbolPrecisionCache[symbol]) {
+      try {
+        const info = await this.getExchangeInfo();
+        for (const s of (info.symbols || [])) {
+          this._symbolPrecisionCache[s.symbol] = {
+            qty: s.quantityPrecision ?? 3,
+            price: s.pricePrecision ?? 2,
+          };
+        }
+        this._exchangeInfoFetchedAt = Date.now();
+        logger.info(`Loaded precision for ${Object.keys(this._symbolPrecisionCache).length} Aster V3 symbols`);
+      } catch (e) {
+        logger.warn(`Failed to fetch V3 exchangeInfo for precision: ${e.message}`);
+      }
+    }
+    return this._symbolPrecisionCache[symbol] || { qty: 3, price: 2 };
+  }
+
+  /**
+   * Truncate value to N decimal places (floor to avoid exceeding step size)
+   */
+  _truncateTo(value, decimals) {
+    const factor = Math.pow(10, decimals);
+    return Math.floor(Math.abs(value) * factor) / factor;
   }
 
   // ════════════════════════════════════════════════════════════════════════════
@@ -541,11 +580,12 @@ class AsterAPIV3 {
    * @returns {Promise<object>} Order response
    */
   async placeMarketOrder(symbol, side, quantity) {
+    const prec = await this._loadSymbolPrecision(symbol);
     return this.placeOrder({
       symbol,
       side: side.toUpperCase(),
       type: 'MARKET',
-      quantity: String(quantity),
+      quantity: String(this._truncateTo(quantity, prec.qty)),
     });
   }
 
@@ -559,12 +599,13 @@ class AsterAPIV3 {
    * @returns {Promise<object>} Order response
    */
   async placeLimitOrder(symbol, side, quantity, price, timeInForce = 'GTC') {
+    const prec = await this._loadSymbolPrecision(symbol);
     return this.placeOrder({
       symbol,
       side: side.toUpperCase(),
       type: 'LIMIT',
-      quantity: String(quantity),
-      price: String(price),
+      quantity: String(this._truncateTo(quantity, prec.qty)),
+      price: String(parseFloat(Number(price).toFixed(prec.price))),
       timeInForce,
     });
   }
@@ -578,12 +619,13 @@ class AsterAPIV3 {
    * @returns {Promise<object>} Order response
    */
   async placeStopLoss(symbol, side, quantity, stopPrice) {
+    const prec = await this._loadSymbolPrecision(symbol);
     const orderData = {
       symbol,
       side: side.toUpperCase(),
       type: 'STOP_MARKET',
-      stopPrice: String(stopPrice),
-      quantity: String(quantity),
+      stopPrice: String(parseFloat(Number(stopPrice).toFixed(prec.price))),
+      quantity: String(this._truncateTo(quantity, prec.qty)),
       reduceOnly: 'true',
     };
     logger.info('📤 Placing V3 stop loss', orderData);
@@ -599,12 +641,13 @@ class AsterAPIV3 {
    * @returns {Promise<object>} Order response
    */
   async placeTakeProfit(symbol, side, quantity, takeProfitPrice) {
+    const prec = await this._loadSymbolPrecision(symbol);
     const orderData = {
       symbol,
       side: side.toUpperCase(),
       type: 'TAKE_PROFIT_MARKET',
-      stopPrice: String(takeProfitPrice),
-      quantity: String(quantity),
+      stopPrice: String(parseFloat(Number(takeProfitPrice).toFixed(prec.price))),
+      quantity: String(this._truncateTo(quantity, prec.qty)),
       reduceOnly: 'true',
     };
     logger.info('📤 Placing V3 take profit', orderData);
@@ -620,11 +663,12 @@ class AsterAPIV3 {
    * @returns {Promise<object>} Order response
    */
   async placeTrailingStop(symbol, side, quantity, callbackRate) {
+    const prec = await this._loadSymbolPrecision(symbol);
     const orderData = {
       symbol,
       side: side.toUpperCase(),
       type: 'TRAILING_STOP_MARKET',
-      quantity: String(quantity),
+      quantity: String(this._truncateTo(quantity, prec.qty)),
       callbackRate: String(callbackRate),
       reduceOnly: 'true',
     };
@@ -754,11 +798,12 @@ class AsterAPIV3 {
    * @returns {Promise<object>} Order response
    */
   async closePosition(symbol, side, quantity) {
+    const prec = await this._loadSymbolPrecision(symbol);
     const orderData = {
       symbol,
       side: side.toUpperCase(),
       type: 'MARKET',
-      quantity: String(quantity),
+      quantity: String(this._truncateTo(quantity, prec.qty)),
       reduceOnly: 'true',
     };
     logger.info('📤 Closing V3 position', orderData);

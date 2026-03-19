@@ -10,6 +10,41 @@ class AsterAPI {
     this.exchangeName = 'aster';
     this.maxRetries = 3;
     this.retryDelay = 1000; // 1 second
+
+    // Symbol precision cache from exchangeInfo
+    this._symbolPrecisionCache = {};
+    this._exchangeInfoFetchedAt = 0;
+  }
+
+  /**
+   * Load symbol precision from exchangeInfo (cached 24h)
+   */
+  async _loadSymbolPrecision(symbol) {
+    const CACHE_TTL = 24 * 60 * 60 * 1000;
+    if (Date.now() - this._exchangeInfoFetchedAt > CACHE_TTL || !this._symbolPrecisionCache[symbol]) {
+      try {
+        const info = await this.makeRequest('GET', '/fapi/v1/exchangeInfo');
+        for (const s of (info.symbols || [])) {
+          this._symbolPrecisionCache[s.symbol] = {
+            qty: s.quantityPrecision ?? 3,
+            price: s.pricePrecision ?? 2,
+          };
+        }
+        this._exchangeInfoFetchedAt = Date.now();
+        logger.info(`Loaded precision for ${Object.keys(this._symbolPrecisionCache).length} Aster symbols`);
+      } catch (e) {
+        logger.warn(`Failed to fetch exchangeInfo for precision: ${e.message}`);
+      }
+    }
+    return this._symbolPrecisionCache[symbol] || { qty: 3, price: 2 };
+  }
+
+  /**
+   * Truncate value to N decimal places (floor to avoid exceeding step size)
+   */
+  _truncateTo(value, decimals) {
+    const factor = Math.pow(10, decimals);
+    return Math.floor(Math.abs(value) * factor) / factor;
   }
 
   /**
@@ -216,13 +251,14 @@ class AsterAPI {
    * Place market order
    */
   async placeMarketOrder(symbol, side, quantity) {
+    const prec = await this._loadSymbolPrecision(symbol);
     const orderData = {
       symbol,
       side: side.toUpperCase(),
       type: 'MARKET',
-      quantity: quantity.toString(),
+      quantity: this._truncateTo(quantity, prec.qty).toString(),
     };
-    
+
     return this.placeOrder(orderData);
   }
 
@@ -230,15 +266,16 @@ class AsterAPI {
    * Place limit order
    */
   async placeLimitOrder(symbol, side, quantity, price) {
+    const prec = await this._loadSymbolPrecision(symbol);
     const orderData = {
       symbol,
       side: side.toUpperCase(),
       type: 'LIMIT',
-      quantity: quantity.toString(),
-      price: price.toString(),
+      quantity: this._truncateTo(quantity, prec.qty).toString(),
+      price: parseFloat(price.toFixed(prec.price)).toString(),
       timeInForce: 'GTC', // Good Till Cancel
     };
-    
+
     return this.placeOrder(orderData);
   }
 
@@ -246,15 +283,16 @@ class AsterAPI {
    * Place stop loss order
    */
   async placeStopLoss(symbol, side, quantity, stopPrice) {
+    const prec = await this._loadSymbolPrecision(symbol);
     const orderData = {
       symbol,
       side: side.toUpperCase(),
       type: 'STOP_MARKET',
-      stopPrice: stopPrice.toString(),
-      quantity: quantity.toString(),
+      stopPrice: parseFloat(stopPrice.toFixed(prec.price)).toString(),
+      quantity: this._truncateTo(quantity, prec.qty).toString(),
       reduceOnly: true,
     };
-    
+
     logger.info('Placing stop loss', orderData);
     return this.placeOrder(orderData);
   }
@@ -263,15 +301,16 @@ class AsterAPI {
    * Place take profit order
    */
   async placeTakeProfit(symbol, side, quantity, takeProfitPrice) {
+    const prec = await this._loadSymbolPrecision(symbol);
     const orderData = {
       symbol,
       side: side.toUpperCase(),
       type: 'TAKE_PROFIT_MARKET',
-      stopPrice: takeProfitPrice.toString(),
-      quantity: quantity.toString(),
+      stopPrice: parseFloat(takeProfitPrice.toFixed(prec.price)).toString(),
+      quantity: this._truncateTo(quantity, prec.qty).toString(),
       reduceOnly: true,
     };
-    
+
     logger.info('Placing take profit', orderData);
     return this.placeOrder(orderData);
   }
@@ -280,14 +319,15 @@ class AsterAPI {
    * Close position (market order with reduceOnly)
    */
   async closePosition(symbol, side, quantity) {
+    const prec = await this._loadSymbolPrecision(symbol);
     const orderData = {
       symbol,
       side: side.toUpperCase(),
       type: 'MARKET',
-      quantity: quantity.toString(),
+      quantity: this._truncateTo(quantity, prec.qty).toString(),
       reduceOnly: true,
     };
-    
+
     logger.info('Closing position', orderData);
     return this.placeOrder(orderData);
   }

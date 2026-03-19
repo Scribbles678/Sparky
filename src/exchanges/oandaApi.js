@@ -129,7 +129,7 @@ class OandaAPI extends BaseExchangeAPI {
       return {
         symbol: pos.instrument,
         positionAmt: units.toString(),
-        entryPrice: units > 0 ? long.averagePrice : short.averagePrice,
+        entryPrice: (units > 0 ? long.averagePrice : short.averagePrice) || '0',
         markPrice: null, // Will be fetched separately if needed
         unRealizedProfit: parseFloat(pos.unrealizedPL),
       };
@@ -151,7 +151,7 @@ class OandaAPI extends BaseExchangeAPI {
       return {
         symbol: pos.instrument,
         positionAmt: units.toString(),
-        entryPrice: units > 0 ? pos.long.averagePrice : pos.short.averagePrice,
+        entryPrice: (units > 0 ? pos.long?.averagePrice : pos.short?.averagePrice) || '0',
         markPrice: null,
         unRealizedProfit: parseFloat(pos.unrealizedPL || '0'),
       };
