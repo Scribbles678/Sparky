@@ -32,6 +32,11 @@ const {
 // In-memory consecutive-failure tracker: userId:exchange → { count, lastFailAt }
 const consecutiveFailures = new Map();
 
+// Auto-reset TTL for circuit breaker (1 hour in ms)
+const CIRCUIT_BREAKER_AUTO_RESET_MS = 60 * 60 * 1000;
+// Redis key prefix for persistent failure tracking
+const FAILURE_REDIS_PREFIX = 'risk:circuit_breaker:';
+
 // In-memory cache for weekly counts (fallback if Redis unavailable)
 const weeklyCountCache = new Map();
 const COUNT_CACHE_TTL = 300000; // 5 minutes
@@ -313,21 +318,89 @@ async function getOpenPositionCount(userId, exchange) {
 
 /**
  * Record a trade failure for a user/exchange (for consecutive failure tracking).
- * Call this when a trade execution fails.
+ * Persists to both in-memory and Redis for durability across PM2 restarts.
  */
 function recordTradeFailure(userId, exchange) {
   if (!userId || !exchange) return;
   const key = `${userId}:${exchange}`;
   const existing = consecutiveFailures.get(key) || { count: 0, lastFailAt: null };
-  consecutiveFailures.set(key, { count: existing.count + 1, lastFailAt: Date.now() });
+  const newState = { count: existing.count + 1, lastFailAt: Date.now() };
+  consecutiveFailures.set(key, newState);
+
+  // Persist to Redis with 2h TTL (longer than auto-reset so we can read it back)
+  ensureRedisInitialized();
+  if (redisClient) {
+    const redisKey = `${FAILURE_REDIS_PREFIX}${key}`;
+    redisClient.setex(redisKey, 7200, JSON.stringify(newState)).catch(() => {});
+  }
+
+  logger.warn(`[RiskLimits] Consecutive failure #${newState.count} for ${key}`);
 }
 
 /**
  * Reset the consecutive failure counter after a successful trade.
+ * Clears both in-memory and Redis state.
  */
 function resetTradeFailures(userId, exchange) {
   if (!userId || !exchange) return;
-  consecutiveFailures.delete(`${userId}:${exchange}`);
+  const key = `${userId}:${exchange}`;
+  const had = consecutiveFailures.has(key);
+  consecutiveFailures.delete(key);
+
+  // Clear from Redis
+  ensureRedisInitialized();
+  if (redisClient) {
+    const redisKey = `${FAILURE_REDIS_PREFIX}${key}`;
+    redisClient.del(redisKey).catch(() => {});
+  }
+
+  if (had) {
+    logger.info(`[RiskLimits] Circuit breaker reset for ${key} after successful trade`);
+  }
+}
+
+/**
+ * Get consecutive failure state for a user/exchange.
+ * Checks in-memory first, falls back to Redis, and applies TTL auto-reset.
+ * @returns {{ count: number, lastFailAt: number | null }}
+ */
+async function getFailureState(userId, exchange) {
+  const key = `${userId}:${exchange}`;
+
+  // Check in-memory first
+  let state = consecutiveFailures.get(key);
+
+  // If not in memory, try Redis (handles PM2 restart case)
+  if (!state) {
+    ensureRedisInitialized();
+    if (redisClient) {
+      try {
+        const redisKey = `${FAILURE_REDIS_PREFIX}${key}`;
+        const raw = await redisClient.get(redisKey);
+        if (raw) {
+          state = JSON.parse(raw);
+          // Restore to in-memory cache
+          consecutiveFailures.set(key, state);
+          logger.info(`[RiskLimits] Restored circuit breaker state from Redis for ${key}: ${state.count} failures`);
+        }
+      } catch (_) {}
+    }
+  }
+
+  if (!state) return { count: 0, lastFailAt: null };
+
+  // Auto-reset: if last failure was more than 1 hour ago, reset the counter
+  if (state.lastFailAt && (Date.now() - state.lastFailAt) > CIRCUIT_BREAKER_AUTO_RESET_MS) {
+    logger.info(`[RiskLimits] Circuit breaker auto-reset for ${key} (last failure was ${Math.round((Date.now() - state.lastFailAt) / 60000)}m ago)`);
+    consecutiveFailures.delete(key);
+    if (redisClient) {
+      const redisKey = `${FAILURE_REDIS_PREFIX}${key}`;
+      redisClient.del(redisKey).catch(() => {});
+    }
+    return { count: 0, lastFailAt: null };
+  }
+
+  return state;
 }
 
 /**
@@ -409,16 +482,21 @@ async function checkRiskLimits(userId, exchange, settings, opts = {}) {
   }
 
   // ------------------------------------------------------------------
-  // 5. CONSECUTIVE FAILURES (circuit breaker)
+  // 5. CONSECUTIVE FAILURES (circuit breaker) — with TTL auto-reset
   // ------------------------------------------------------------------
   if (isEntry) {
     const maxFailures = settings.max_consecutive_failures ?? 0;
     if (maxFailures > 0) {
-      const failState = consecutiveFailures.get(`${userId}:${exchange}`);
-      if (failState && failState.count >= maxFailures) {
+      const failState = await getFailureState(userId, exchange);
+      if (failState.count >= maxFailures) {
+        const minutesSinceLastFail = failState.lastFailAt
+          ? Math.round((Date.now() - failState.lastFailAt) / 60000)
+          : 0;
+        const autoResetMin = Math.round(CIRCUIT_BREAKER_AUTO_RESET_MS / 60000);
+        const resetIn = Math.max(0, autoResetMin - minutesSinceLastFail);
         return {
           allowed: false,
-          reason: `Circuit breaker tripped: ${failState.count} consecutive execution failures on ${exchange}. Fix any API / credential issues and re-enable trading in Exchange Settings.`,
+          reason: `Circuit breaker tripped: ${failState.count} consecutive execution failures on ${exchange}. Fix any API / credential issues and re-enable trading in Exchange Settings. Auto-resets in ${resetIn} minutes.`,
           limitType: 'max_consecutive_failures',
           current: failState.count,
           limit: maxFailures,
@@ -545,6 +623,7 @@ module.exports = {
   getOpenPositionCount,
   recordTradeFailure,
   resetTradeFailures,
+  getFailureState,
   invalidateRiskLimitCache,
   getWeekStart,
 };
