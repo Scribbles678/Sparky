@@ -586,6 +586,7 @@ class AsterAPIV3 {
       side: side.toUpperCase(),
       type: 'MARKET',
       quantity: String(this._truncateTo(quantity, prec.qty)),
+      newOrderRespType: 'RESULT', // Get FILLED result with avgPrice for notifications
     });
   }
 
@@ -709,12 +710,13 @@ class AsterAPIV3 {
     const qty = String(quantity);
 
     const orders = [
-      // 1. Entry order (market)
+      // 1. Entry order (market) — RESULT returns avgPrice when filled
       {
         symbol,
         side: side.toUpperCase(),
         type: 'MARKET',
         quantity: qty,
+        newOrderRespType: 'RESULT',
       },
       // 2. Take profit (reduce-only)
       {

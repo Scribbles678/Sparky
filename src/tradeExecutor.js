@@ -772,6 +772,15 @@ class TradeExecutor {
         }
       }
 
+      // Use actual fill price from Aster when available (newOrderRespType: RESULT)
+      if (this.api.exchangeName === 'aster' && orderResult?.avgPrice) {
+        const avgPrice = parseFloat(orderResult.avgPrice);
+        if (avgPrice > 0) {
+          entryPrice = avgPrice;
+          logger.info(`Using Aster fill price: ${entryPrice}`);
+        }
+      }
+
       logger.logTrade('opened', symbol, {
         orderId: orderResult.orderId,
         side,
