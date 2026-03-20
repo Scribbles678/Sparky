@@ -148,31 +148,35 @@ router.post('/', async (req, res) => {
 
       for (const order of orders) {
         try {
+          let qty = order.quantity;
+          if (exchangeName.toLowerCase() === 'tradier') {
+            qty = Math.max(1, Math.floor(Math.abs(qty)));
+          }
           if (order.type === 'stop_loss') {
             const slResult = await api.placeStopLoss(
               symbol,
               order.side,
-              order.quantity,
+              qty,
               order.price
             );
             result.sl_order_id = _extractOrderId(slResult);
             if (!result.sl_order_id) {
               logger.error(
                 `[PROTECTION] SL placed but no order ID extracted on ${exchangeName} ${symbol}: ` +
-                `price=${order.price} qty=${order.quantity} side=${order.side} ` +
+                `price=${order.price} qty=${qty} side=${order.side} ` +
                 `raw_result=${JSON.stringify(slResult)}`
               );
             } else {
               logger.info(
                 `[PROTECTION] Placed SL on ${exchangeName} ${symbol}: ` +
-                `price=${order.price} qty=${order.quantity} side=${order.side} ` +
+                `price=${order.price} qty=${qty} side=${order.side} ` +
                 `orderId=${result.sl_order_id}`
               );
               if (userId) {
                 notifyProtectionOrderPlaced(userId, symbol, exchangeName, 'stop_loss', {
                   orderId: result.sl_order_id,
                   price: order.price,
-                  quantity: order.quantity,
+                  quantity: qty,
                   side: order.side,
                   assetClass: _getAssetClassForExchange(exchangeName),
                 }).catch(() => {});
@@ -182,27 +186,27 @@ router.post('/', async (req, res) => {
             const tpResult = await api.placeTakeProfit(
               symbol,
               order.side,
-              order.quantity,
+              qty,
               order.price
             );
             const tpOrderId = _extractOrderId(tpResult);
             if (!tpOrderId) {
               logger.error(
                 `[PROTECTION] TP placed but no order ID extracted on ${exchangeName} ${symbol}: ` +
-                `price=${order.price} qty=${order.quantity} side=${order.side} ` +
+                `price=${order.price} qty=${qty} side=${order.side} ` +
                 `lot_id=${order.lot_id || 'none'} raw_result=${JSON.stringify(tpResult)}`
               );
             } else {
               logger.info(
                 `[PROTECTION] Placed TP on ${exchangeName} ${symbol}: ` +
-                `price=${order.price} qty=${order.quantity} side=${order.side} ` +
+                `price=${order.price} qty=${qty} side=${order.side} ` +
                 `lot_id=${order.lot_id || 'none'} orderId=${tpOrderId}`
               );
               if (userId) {
                 notifyProtectionOrderPlaced(userId, symbol, exchangeName, 'take_profit', {
                   orderId: tpOrderId,
                   price: order.price,
-                  quantity: order.quantity,
+                  quantity: qty,
                   side: order.side,
                   assetClass: _getAssetClassForExchange(exchangeName),
                 }).catch(() => {});
@@ -220,20 +224,20 @@ router.post('/', async (req, res) => {
               const tsResult = await api.placeTrailingStop(
                 symbol,
                 order.side,
-                order.quantity,
+                qty,
                 order.callback_rate
               );
               // Trailing stop counts as the SL order
               result.sl_order_id = _extractOrderId(tsResult);
               logger.info(
                 `[PROTECTION] Placed Trailing Stop on ${exchangeName} ${symbol}: ` +
-                `rate=${order.callback_rate}% qty=${order.quantity} ` +
+                `rate=${order.callback_rate}% qty=${qty} ` +
                 `orderId=${result.sl_order_id}`
               );
               if (userId && result.sl_order_id) {
                 notifyProtectionOrderPlaced(userId, symbol, exchangeName, 'trailing_stop', {
                   orderId: result.sl_order_id,
-                  quantity: order.quantity,
+                  quantity: qty,
                   side: order.side,
                   assetClass: _getAssetClassForExchange(exchangeName),
                 }).catch(() => {});
@@ -328,15 +332,19 @@ router.get('/:exchange/:symbol', async (req, res) => {
       openOrders = Array.isArray(rawOrders) ? rawOrders : [];
     }
 
-    // Filter to only SL/TP/trailing type orders
+    // Filter to only open SL/TP/trailing type orders (exclude rejected/filled/cancelled)
+    const openStatuses = ['open', 'pending', 'partially_filled', 'new', 'partially_filled'];
     const protectionOrders = openOrders.filter(o => {
       const type = String(o.type || o.orderType || '').toUpperCase();
-      return (
+      const status = String(o.status || o.state || '').toLowerCase();
+      const typeOk = (
         type.includes('STOP') ||
         type.includes('TAKE_PROFIT') ||
         type.includes('TRAILING') ||
         type.includes('LIMIT')  // TP is often a limit order
       );
+      const statusOk = !status || openStatuses.includes(status);
+      return typeOk && statusOk;
     }).map(o => ({
       id: o.orderId || o.order_id || o.id || o.clientOrderId,
       type: o.type || o.orderType,

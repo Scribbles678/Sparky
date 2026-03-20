@@ -276,12 +276,13 @@ class TradierAPI extends BaseExchangeAPI {
    * Place stop loss order
    */
   async placeStopLoss(symbol, side, quantity, stopPrice) {
+    const qty = Math.max(1, Math.floor(Math.abs(quantity)));
     const orderData = {
       account_id: this.accountId,
       class: 'equity',
       symbol: symbol,
       side: side.toLowerCase(),
-      quantity: Math.abs(quantity).toString(),
+      quantity: qty.toString(),
       type: 'stop',
       stop: parseFloat(stopPrice).toFixed(2),
       duration: 'gtc',
@@ -312,13 +313,13 @@ class TradierAPI extends BaseExchangeAPI {
    * Place take profit order (limit order)
    */
   async placeTakeProfit(symbol, side, quantity, takeProfitPrice) {
-    // Take profit is a limit order to close position
+    const qty = Math.max(1, Math.floor(Math.abs(quantity)));
     const orderData = {
       account_id: this.accountId,
       class: 'equity',
       symbol: symbol,
       side: side.toLowerCase(),
-      quantity: Math.abs(quantity).toString(),
+      quantity: qty.toString(),
       type: 'limit',
       price: parseFloat(takeProfitPrice).toFixed(2),
       duration: 'gtc',
@@ -550,6 +551,46 @@ class TradierAPI extends BaseExchangeAPI {
       : [response.orders.order];
     
     return orders;
+  }
+
+  /**
+   * Get open orders for verification (SL/TP protection orders).
+   * Tradier: status=open,pending,partially_filled excludes rejected/filled/cancelled.
+   */
+  async getOpenOrders(symbol) {
+    const response = await this.makeRequest('GET', `/accounts/${this.accountId}/orders`, {
+      status: 'open,pending,partially_filled',
+      limit: '500',
+    });
+
+    if (!response.orders || !response.orders.order) {
+      return [];
+    }
+
+    const orders = Array.isArray(response.orders.order)
+      ? response.orders.order
+      : [response.orders.order];
+
+    const open = orders.filter(o => {
+      const s = String(o.status || '').toLowerCase();
+      return (s === 'open' || s === 'pending' || s === 'partially_filled') &&
+        (!symbol || (o.symbol && o.symbol.toUpperCase() === symbol.toUpperCase()));
+    });
+
+    return open.map(o => ({
+      orderId: o.id || o.order_id,
+      order_id: o.id || o.order_id,
+      id: o.id || o.order_id,
+      type: o.type,
+      orderType: o.type,
+      side: o.side,
+      stopPrice: o.stop,
+      price: o.price,
+      quantity: o.quantity,
+      origQty: o.quantity,
+      status: o.status,
+      symbol: o.symbol,
+    }));
   }
 
   /**
