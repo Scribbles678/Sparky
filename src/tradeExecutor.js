@@ -1372,10 +1372,21 @@ class TradeExecutor {
         }
       }
 
+      // Get verified exit price: prefer live quote over stale mark price
+      let verifiedExitPrice = rawExitPrice;
+      try {
+        const ticker = await this.api.getTicker(symbol);
+        if (ticker && parseFloat(ticker.lastPrice) > 0) {
+          verifiedExitPrice = parseFloat(ticker.lastPrice);
+        }
+      } catch (_) { /* use rawExitPrice as fallback */ }
+
       return {
         success: true,
         action: 'closed',
         closeOrder: closeResult,
+        fill_price: verifiedExitPrice,
+        exitPrice: verifiedExitPrice,
         pnl: {
           usd: pnlUsd,
           percent: pnlPercent,

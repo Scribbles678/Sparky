@@ -136,6 +136,7 @@ router.post('/', async (req, res) => {
         success: true,
         sl_order_id: null,
         tp_order_id: null,
+        tp_orders: {},  // Per-lot TP: { lot_id: order_id }
         errors: [],
       };
 
@@ -149,11 +150,19 @@ router.post('/', async (req, res) => {
               order.price
             );
             result.sl_order_id = _extractOrderId(slResult);
-            logger.info(
-              `[PROTECTION] Placed SL on ${exchangeName} ${symbol}: ` +
-              `price=${order.price} qty=${order.quantity} side=${order.side} ` +
-              `orderId=${result.sl_order_id}`
-            );
+            if (!result.sl_order_id) {
+              logger.error(
+                `[PROTECTION] SL placed but no order ID extracted on ${exchangeName} ${symbol}: ` +
+                `price=${order.price} qty=${order.quantity} side=${order.side} ` +
+                `raw_result=${JSON.stringify(slResult)}`
+              );
+            } else {
+              logger.info(
+                `[PROTECTION] Placed SL on ${exchangeName} ${symbol}: ` +
+                `price=${order.price} qty=${order.quantity} side=${order.side} ` +
+                `orderId=${result.sl_order_id}`
+              );
+            }
           } else if (order.type === 'take_profit') {
             const tpResult = await api.placeTakeProfit(
               symbol,
@@ -161,12 +170,27 @@ router.post('/', async (req, res) => {
               order.quantity,
               order.price
             );
-            result.tp_order_id = _extractOrderId(tpResult);
-            logger.info(
-              `[PROTECTION] Placed TP on ${exchangeName} ${symbol}: ` +
-              `price=${order.price} qty=${order.quantity} side=${order.side} ` +
-              `orderId=${result.tp_order_id}`
-            );
+            const tpOrderId = _extractOrderId(tpResult);
+            if (!tpOrderId) {
+              logger.error(
+                `[PROTECTION] TP placed but no order ID extracted on ${exchangeName} ${symbol}: ` +
+                `price=${order.price} qty=${order.quantity} side=${order.side} ` +
+                `lot_id=${order.lot_id || 'none'} raw_result=${JSON.stringify(tpResult)}`
+              );
+            } else {
+              logger.info(
+                `[PROTECTION] Placed TP on ${exchangeName} ${symbol}: ` +
+                `price=${order.price} qty=${order.quantity} side=${order.side} ` +
+                `lot_id=${order.lot_id || 'none'} orderId=${tpOrderId}`
+              );
+            }
+            // Per-lot TP: store in tp_orders map keyed by lot_id
+            if (order.lot_id) {
+              result.tp_orders[order.lot_id] = tpOrderId;
+            } else {
+              // Single TP (backward compat for single-lot positions)
+              result.tp_order_id = tpOrderId;
+            }
           } else if (order.type === 'trailing_stop') {
             if (typeof api.placeTrailingStop === 'function') {
               const tsResult = await api.placeTrailingStop(

@@ -283,15 +283,27 @@ class TradierAPI extends BaseExchangeAPI {
       side: side.toLowerCase(),
       quantity: Math.abs(quantity).toString(),
       type: 'stop',
-      stop: stopPrice.toString(),
+      stop: parseFloat(stopPrice).toFixed(2),
       duration: 'gtc',
     };
-    
+
     logger.info('Placing Tradier stop loss', orderData);
     const response = await this.makeRequest('POST', `/accounts/${this.accountId}/orders`, orderData);
-    
+
+    // Tradier returns { order: { id: 12345, status: "ok" } } on success
+    // or { errors: { error: ["..."] } } on failure
+    const orderId = response.order?.id || response.order?.order_id;
+    if (!orderId) {
+      const errorMsg = response.errors?.error || response.errors || 'Unknown error';
+      logger.error('Tradier stop loss placement failed — no order ID returned', {
+        symbol, side, quantity, stopPrice,
+        response: JSON.stringify(response),
+        errors: errorMsg,
+      });
+    }
+
     return {
-      orderId: response.order?.id || response.order?.order_id,
+      orderId,
       status: response.order?.status || 'pending',
     };
   }
@@ -308,15 +320,25 @@ class TradierAPI extends BaseExchangeAPI {
       side: side.toLowerCase(),
       quantity: Math.abs(quantity).toString(),
       type: 'limit',
-      price: takeProfitPrice.toString(),
+      price: parseFloat(takeProfitPrice).toFixed(2),
       duration: 'gtc',
     };
-    
+
     logger.info('Placing Tradier take profit', orderData);
     const response = await this.makeRequest('POST', `/accounts/${this.accountId}/orders`, orderData);
-    
+
+    const orderId = response.order?.id || response.order?.order_id;
+    if (!orderId) {
+      const errorMsg = response.errors?.error || response.errors || 'Unknown error';
+      logger.error('Tradier take profit placement failed — no order ID returned', {
+        symbol, side, quantity, takeProfitPrice,
+        response: JSON.stringify(response),
+        errors: errorMsg,
+      });
+    }
+
     return {
-      orderId: response.order?.id || response.order?.order_id,
+      orderId,
       status: response.order?.status || 'pending',
     };
   }

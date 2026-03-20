@@ -78,7 +78,16 @@ class OandaAPI extends BaseExchangeAPI {
           return this.makeRequest(method, endpoint, data, retryCount + 1);
         }
       }
-      
+
+      // Extract OANDA's errorMessage/rejectReason so webhook returns specific error (not generic axios message)
+      const respData = error.response?.data;
+      const oandaMsg = (typeof respData === 'object' && respData?.errorMessage) || respData?.rejectReason;
+      if (oandaMsg) {
+        const err = new Error(String(oandaMsg));
+        err.originalError = error;
+        throw err;
+      }
+
       throw error;
     }
   }
@@ -129,7 +138,7 @@ class OandaAPI extends BaseExchangeAPI {
       return {
         symbol: pos.instrument,
         positionAmt: units.toString(),
-        entryPrice: (units > 0 ? long.averagePrice : short.averagePrice) || '0',
+        entryPrice: units > 0 ? long.averagePrice : short.averagePrice,
         markPrice: null, // Will be fetched separately if needed
         unRealizedProfit: parseFloat(pos.unrealizedPL),
       };
@@ -151,7 +160,7 @@ class OandaAPI extends BaseExchangeAPI {
       return {
         symbol: pos.instrument,
         positionAmt: units.toString(),
-        entryPrice: (units > 0 ? pos.long?.averagePrice : pos.short?.averagePrice) || '0',
+        entryPrice: units > 0 ? pos.long.averagePrice : pos.short.averagePrice,
         markPrice: null,
         unRealizedProfit: parseFloat(pos.unrealizedPL || '0'),
       };
