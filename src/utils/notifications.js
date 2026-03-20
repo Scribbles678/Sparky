@@ -166,13 +166,14 @@ async function createNotification(params) {
 function notifyTradeSuccess(userId, symbol, action, exchange, quantity, price, options = {}) {
   const { tradeId, orderId, assetClass } = options;
   const isForex = assetClass === 'forex' || (exchange || '').toLowerCase() === 'oanda';
+  const qtyLabel = assetClass === 'stocks' ? 'shares' : 'units';
   const priceInfo = price
     ? isForex
       ? ` at rate ${price.toFixed(4)}`
       : ` at $${price.toFixed(2)}`
     : '';
-  const quantityInfo = quantity ? ` ${quantity} units` : '';
-  const tradeInfo = tradeId ? ` · Trade #${tradeId}` : '';
+  const quantityInfo = quantity ? ` ${quantity} ${qtyLabel}` : '';
+  const tradeInfo = tradeId ? ` · Trade #${tradeId}` : (orderId ? ` · Order #${orderId}` : '');
 
   const message = `Opened ${action.toUpperCase()}${quantityInfo}${priceInfo} on ${(exchange || '').toUpperCase()}${tradeInfo}`;
 
@@ -197,6 +198,7 @@ function notifyTradeSuccess(userId, symbol, action, exchange, quantity, price, o
 function notifyProtectionOrderPlaced(userId, symbol, exchange, orderType, options = {}) {
   const { orderId, price, quantity, distance, side, assetClass } = options;
   const isForex = assetClass === 'forex' || (exchange || '').toLowerCase() === 'oanda';
+  const qtyLabel = assetClass === 'stocks' ? 'shares' : 'units';
 
   const titles = {
     stop_loss: 'Stop Loss Placed',
@@ -207,14 +209,14 @@ function notifyProtectionOrderPlaced(userId, symbol, exchange, orderType, option
 
   let message;
   if (orderType === 'trailing_stop') {
-    const qtyPart = quantity ? ` for ${quantity} units` : '';
+    const qtyPart = quantity ? ` for ${quantity} ${qtyLabel}` : '';
     const orderPart = orderId ? ` (Order #${orderId})` : '';
     message = `Trailing stop placed${qtyPart}${orderPart} on ${(exchange || '').toUpperCase()}`;
   } else {
     const priceStr = price != null
       ? (isForex ? `rate ${Number(price).toFixed(4)}` : `$${Number(price).toFixed(2)}`)
       : null;
-    const qtyPart = quantity ? ` for ${quantity} units` : '';
+    const qtyPart = quantity ? ` for ${quantity} ${qtyLabel}` : '';
     const pricePart = priceStr ? ` at ${priceStr}` : '';
     const actionLabel = orderType === 'stop_loss' ? 'Stop loss' : 'Take profit';
     message = `${actionLabel} placed${pricePart}${qtyPart} on ${(exchange || '').toUpperCase()}`;

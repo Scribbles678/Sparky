@@ -18,6 +18,11 @@ const logger = require('../utils/logger');
 const ExchangeFactory = require('../exchanges/ExchangeFactory');
 const { notifyProtectionOrderPlaced } = require('../utils/notifications');
 
+function _getAssetClassForExchange(exchangeName) {
+  const m = { oanda: 'forex', tradier: 'stocks', alpaca: 'stocks', aster: 'crypto', apex: 'crypto' };
+  return m[(exchangeName || '').toLowerCase()] || undefined;
+}
+
 /**
  * POST /orders/protection
  *
@@ -169,7 +174,7 @@ router.post('/', async (req, res) => {
                   price: order.price,
                   quantity: order.quantity,
                   side: order.side,
-                  assetClass: exchangeName.toLowerCase() === 'oanda' ? 'forex' : undefined,
+                  assetClass: _getAssetClassForExchange(exchangeName),
                 }).catch(() => {});
               }
             }
@@ -199,7 +204,7 @@ router.post('/', async (req, res) => {
                   price: order.price,
                   quantity: order.quantity,
                   side: order.side,
-                  assetClass: exchangeName.toLowerCase() === 'oanda' ? 'forex' : undefined,
+                  assetClass: _getAssetClassForExchange(exchangeName),
                 }).catch(() => {});
               }
             }
@@ -230,7 +235,7 @@ router.post('/', async (req, res) => {
                   orderId: result.sl_order_id,
                   quantity: order.quantity,
                   side: order.side,
-                  assetClass: exchangeName.toLowerCase() === 'oanda' ? 'forex' : undefined,
+                  assetClass: _getAssetClassForExchange(exchangeName),
                 }).catch(() => {});
               }
             } else {
