@@ -249,11 +249,13 @@ class OandaAPI extends BaseExchangeAPI {
     logger.info('Placing OANDA market order', orderData);
     const response = await this.makeRequest('POST', `/v3/accounts/${this.accountId}/orders`, orderData);
     
+    const tradeOpened = response.orderFillTransaction?.tradeOpened;
     return {
       orderId: response.orderFillTransaction?.id || response.orderCreateTransaction?.id,
       status: 'FILLED',
-      stopLossOrderId: response.orderFillTransaction?.tradeOpened?.stopLossOrderID || null,
-      takeProfitOrderId: response.orderFillTransaction?.tradeOpened?.takeProfitOrderID || null,
+      tradeId: tradeOpened?.tradeID || tradeOpened?.tradeId || null,
+      stopLossOrderId: tradeOpened?.stopLossOrderID || null,
+      takeProfitOrderId: tradeOpened?.takeProfitOrderID || null,
     };
   }
 
@@ -311,6 +313,24 @@ class OandaAPI extends BaseExchangeAPI {
       orderId: response.orderCreateTransaction?.id,
       status: 'NEW',
     };
+  }
+
+  /**
+   * Place trailing stop using callback rate (%). Adapter for protection orders.
+   * Converts percentage to price distance and calls placeTrailingStopLoss.
+   * @param {string} symbol
+   * @param {string} side - Exit side (SELL to close long, BUY to close short)
+   * @param {number} quantity
+   * @param {number} callbackRate - Trailing distance as percentage (e.g., 1 = 1%)
+   */
+  async placeTrailingStop(symbol, side, quantity, callbackRate) {
+    const ticker = await this.getTicker(symbol);
+    const price = parseFloat(ticker?.lastPrice || ticker?.price || 0);
+    if (!price || price <= 0) {
+      throw new Error('Could not get price for trailing stop distance calculation');
+    }
+    const distance = price * (parseFloat(callbackRate) / 100);
+    return this.placeTrailingStopLoss(symbol, side, quantity, distance);
   }
 
   /**

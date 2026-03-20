@@ -18,6 +18,7 @@ const TradeLifecycleManager = require('./tradeLifecycleManager');
 const {
   notifyTradeSuccess,
   notifyTradeFailed,
+  notifyProtectionOrderPlaced,
   notifyPositionClosedProfit,
   notifyPositionClosedLoss,
   notifyTradeBlocked,
@@ -867,6 +868,13 @@ class TradeExecutor {
                     percent: finalTrailingStopPercent,
                     type: 'TRAILING',
                   });
+                  if (alertData.userId) {
+                    notifyProtectionOrderPlaced(alertData.userId, symbol, this.exchange, 'trailing_stop', {
+                      orderId: stopLossOrderId,
+                      quantity: roundedQuantity,
+                      assetClass: this.getAssetClass(),
+                    }).catch(() => {});
+                  }
                 } else if (isAlpaca && (finalTrailingStop || finalTrailingStopPercent)) {
                   // Alpaca trailing stop ($ or %)
                   const trailPrice = finalTrailingStop ? parseFloat(finalTrailingStop) : null;
@@ -890,6 +898,13 @@ class TradeExecutor {
                     trailPercent,
                     type: 'TRAILING',
                   });
+                  if (alertData.userId) {
+                    notifyProtectionOrderPlaced(alertData.userId, symbol, this.exchange, 'trailing_stop', {
+                      orderId: stopLossOrderId,
+                      quantity: roundedQuantity,
+                      assetClass: this.getAssetClass(),
+                    }).catch(() => {});
+                  }
                 } else if (isAster && (finalTrailingStop || finalTrailingStopPercent)) {
                   // Aster trailing stop (callback rate in percent, e.g., 1 = 1%)
                   const callbackRate = finalTrailingStopPercent || finalTrailingStop;
@@ -909,6 +924,13 @@ class TradeExecutor {
                     callbackRate,
                     type: 'TRAILING',
                   });
+                  if (alertData.userId) {
+                    notifyProtectionOrderPlaced(alertData.userId, symbol, this.exchange, 'trailing_stop', {
+                      orderId: stopLossOrderId,
+                      quantity: roundedQuantity,
+                      assetClass: this.getAssetClass(),
+                    }).catch(() => {});
+                  }
                 } else if (isApex && (finalTrailingStop || finalTrailingStopPercent)) {
                   // Apex trailing stop via CCXT Pro
                   const callbackRate = finalTrailingStopPercent || finalTrailingStop;
@@ -928,6 +950,13 @@ class TradeExecutor {
                     callbackRate,
                     type: 'TRAILING',
                   });
+                  if (alertData.userId) {
+                    notifyProtectionOrderPlaced(alertData.userId, symbol, this.exchange, 'trailing_stop', {
+                      orderId: stopLossOrderId,
+                      quantity: roundedQuantity,
+                      assetClass: this.getAssetClass(),
+                    }).catch(() => {});
+                  }
                 } else if (this.api.exchangeName === 'tradier' && (finalTrailingStop || finalTrailingStopPercent)) {
                   const trailPercent = finalTrailingStopPercent || finalTrailingStop;
 
@@ -946,6 +975,13 @@ class TradeExecutor {
                     trailPercent,
                     type: 'TRAILING',
                   });
+                  if (alertData.userId) {
+                    notifyProtectionOrderPlaced(alertData.userId, symbol, this.exchange, 'trailing_stop', {
+                      orderId: stopLossOrderId,
+                      quantity: roundedQuantity,
+                      assetClass: this.getAssetClass(),
+                    }).catch(() => {});
+                  }
                 }
               } else if (finalStopLoss) {
                 // Place regular stop loss or stop-limit
@@ -993,6 +1029,14 @@ class TradeExecutor {
                   type: stopLossType,
                   limitPrice: stopLimitPrice,
                 });
+                if (alertData.userId && stopLossOrderId) {
+                  notifyProtectionOrderPlaced(alertData.userId, symbol, this.exchange, 'stop_loss', {
+                    orderId: stopLossOrderId,
+                    price: roundedStopPrice,
+                    quantity: roundedQuantity,
+                    assetClass: this.getAssetClass(),
+                  }).catch(() => {});
+                }
               }
             } catch (error) {
               logger.logError('Failed to place stop loss', error, { symbol });
@@ -1023,6 +1067,14 @@ class TradeExecutor {
                 percent: finalTakeProfit,
                 dollarAmount: `$${dollarProfit}`,
               });
+              if (alertData.userId && takeProfitOrderId) {
+                notifyProtectionOrderPlaced(alertData.userId, symbol, this.exchange, 'take_profit', {
+                  orderId: takeProfitOrderId,
+                  price: roundedTpPrice,
+                  quantity: roundedQuantity,
+                  assetClass: this.getAssetClass(),
+                }).catch(() => {});
+              }
             } catch (error) {
               logger.logError('Failed to place take profit', error, { symbol });
               // Don't fail the entire trade if TP fails
@@ -1135,7 +1187,12 @@ class TradeExecutor {
           side,
           this.exchange,
           roundedQuantity,
-          entryPrice
+          entryPrice,
+          {
+            tradeId: orderResult.tradeId,
+            orderId: orderResult.orderId,
+            assetClass: this.getAssetClass(),
+          }
         );
       }
 

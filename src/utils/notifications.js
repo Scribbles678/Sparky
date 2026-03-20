@@ -161,18 +161,72 @@ async function createNotification(params) {
 
 /**
  * Trade executed successfully
+ * @param {Object} [options] - Optional: { tradeId?, orderId?, assetClass?, orderType? }
  */
-function notifyTradeSuccess(userId, symbol, action, exchange, quantity, price) {
-  const priceInfo = price ? ` at $${price.toFixed(2)}` : '';
-  const quantityInfo = quantity ? ` (${quantity})` : '';
+function notifyTradeSuccess(userId, symbol, action, exchange, quantity, price, options = {}) {
+  const { tradeId, orderId, assetClass } = options;
+  const isForex = assetClass === 'forex' || (exchange || '').toLowerCase() === 'oanda';
+  const priceInfo = price
+    ? isForex
+      ? ` at rate ${price.toFixed(4)}`
+      : ` at $${price.toFixed(2)}`
+    : '';
+  const quantityInfo = quantity ? ` ${quantity} units` : '';
+  const tradeInfo = tradeId ? ` · Trade #${tradeId}` : '';
+
+  const message = `Opened ${action.toUpperCase()}${quantityInfo}${priceInfo} on ${(exchange || '').toUpperCase()}${tradeInfo}`;
 
   return createNotification({
     userId,
     type: 'trade',
     title: `${action.toUpperCase()} ${symbol}`,
-    message: `Successfully opened ${action.toUpperCase()} position for ${symbol}${quantityInfo}${priceInfo} on ${exchange.toUpperCase()}`,
-    metadata: { symbol, action, exchange, quantity, price },
+    message,
+    metadata: { symbol, action, exchange, quantity, price, tradeId, orderId, assetClass },
     preferenceKey: 'notify_trade_success',
+  });
+}
+
+/**
+ * Protection order (SL/TP/TS) placed successfully
+ * @param {string} userId
+ * @param {string} symbol
+ * @param {string} exchange
+ * @param {string} orderType - 'stop_loss' | 'take_profit' | 'trailing_stop'
+ * @param {Object} [options] - { orderId?, price?, quantity?, distance?, side?, assetClass? }
+ */
+function notifyProtectionOrderPlaced(userId, symbol, exchange, orderType, options = {}) {
+  const { orderId, price, quantity, distance, side, assetClass } = options;
+  const isForex = assetClass === 'forex' || (exchange || '').toLowerCase() === 'oanda';
+
+  const titles = {
+    stop_loss: 'Stop Loss Placed',
+    take_profit: 'Take Profit Placed',
+    trailing_stop: 'Trailing Stop Placed',
+  };
+  const titlePrefix = titles[orderType] || 'Protection Order Placed';
+
+  let message;
+  if (orderType === 'trailing_stop') {
+    const qtyPart = quantity ? ` for ${quantity} units` : '';
+    const orderPart = orderId ? ` (Order #${orderId})` : '';
+    message = `Trailing stop placed${qtyPart}${orderPart} on ${(exchange || '').toUpperCase()}`;
+  } else {
+    const priceStr = price != null
+      ? (isForex ? `rate ${Number(price).toFixed(4)}` : `$${Number(price).toFixed(2)}`)
+      : null;
+    const qtyPart = quantity ? ` for ${quantity} units` : '';
+    const pricePart = priceStr ? ` at ${priceStr}` : '';
+    const actionLabel = orderType === 'stop_loss' ? 'Stop loss' : 'Take profit';
+    message = `${actionLabel} placed${pricePart}${qtyPart} on ${(exchange || '').toUpperCase()}`;
+  }
+
+  return createNotification({
+    userId,
+    type: 'trade',
+    title: `${titlePrefix}: ${symbol}`,
+    message,
+    metadata: { symbol, exchange, orderType, orderId, price, quantity, distance, side, assetClass },
+    preferenceKey: 'notify_protection_order_placed',
   });
 }
 
@@ -454,6 +508,7 @@ module.exports = {
   // Trade execution
   notifyTradeSuccess,
   notifyTradeFailed,
+  notifyProtectionOrderPlaced,
   notifyPositionClosedProfit,
   notifyPositionClosedLoss,
   notifyTakeProfitTriggered,

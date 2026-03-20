@@ -16,6 +16,7 @@ const express = require('express');
 const router = express.Router();
 const logger = require('../utils/logger');
 const ExchangeFactory = require('../exchanges/ExchangeFactory');
+const { notifyProtectionOrderPlaced } = require('../utils/notifications');
 
 /**
  * POST /orders/protection
@@ -162,6 +163,15 @@ router.post('/', async (req, res) => {
                 `price=${order.price} qty=${order.quantity} side=${order.side} ` +
                 `orderId=${result.sl_order_id}`
               );
+              if (userId) {
+                notifyProtectionOrderPlaced(userId, symbol, exchangeName, 'stop_loss', {
+                  orderId: result.sl_order_id,
+                  price: order.price,
+                  quantity: order.quantity,
+                  side: order.side,
+                  assetClass: exchangeName.toLowerCase() === 'oanda' ? 'forex' : undefined,
+                }).catch(() => {});
+              }
             }
           } else if (order.type === 'take_profit') {
             const tpResult = await api.placeTakeProfit(
@@ -183,6 +193,15 @@ router.post('/', async (req, res) => {
                 `price=${order.price} qty=${order.quantity} side=${order.side} ` +
                 `lot_id=${order.lot_id || 'none'} orderId=${tpOrderId}`
               );
+              if (userId) {
+                notifyProtectionOrderPlaced(userId, symbol, exchangeName, 'take_profit', {
+                  orderId: tpOrderId,
+                  price: order.price,
+                  quantity: order.quantity,
+                  side: order.side,
+                  assetClass: exchangeName.toLowerCase() === 'oanda' ? 'forex' : undefined,
+                }).catch(() => {});
+              }
             }
             // Per-lot TP: store in tp_orders map keyed by lot_id
             if (order.lot_id) {
@@ -206,6 +225,14 @@ router.post('/', async (req, res) => {
                 `rate=${order.callback_rate}% qty=${order.quantity} ` +
                 `orderId=${result.sl_order_id}`
               );
+              if (userId && result.sl_order_id) {
+                notifyProtectionOrderPlaced(userId, symbol, exchangeName, 'trailing_stop', {
+                  orderId: result.sl_order_id,
+                  quantity: order.quantity,
+                  side: order.side,
+                  assetClass: exchangeName.toLowerCase() === 'oanda' ? 'forex' : undefined,
+                }).catch(() => {});
+              }
             } else {
               result.errors.push(
                 `${exchangeName} does not support placeTrailingStop`
