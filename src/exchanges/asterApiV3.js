@@ -687,8 +687,12 @@ class AsterAPIV3 {
       throw new Error('Aster V3 batch orders limited to 5 per request');
     }
     logger.info(`📤 Placing batch of ${orders.length} V3 orders`);
+    // URL-encode the JSON array before signing — the signature is computed on
+    // the raw param string, but axios URL-encodes special chars ([, {, ", etc.)
+    // when building the request URL.  Pre-encoding ensures the signed message
+    // matches what the server receives.
     return this.makeRequest('POST', '/fapi/v3/batchOrders', {
-      batchOrders: JSON.stringify(orders),
+      batchOrders: encodeURIComponent(JSON.stringify(orders)),
     });
   }
 
