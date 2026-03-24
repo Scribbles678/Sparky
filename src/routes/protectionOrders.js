@@ -161,6 +161,12 @@ router.post('/', async (req, res) => {
             );
             result.sl_order_id = _extractOrderId(slResult);
             if (!result.sl_order_id) {
+              const tradierErr = slResult._tradierError;
+              if (tradierErr && Array.isArray(tradierErr)) {
+                result.errors.push(...tradierErr.map(e => `Tradier: ${e}`));
+              } else {
+                result.errors.push('Tradier: no order ID (see Sparky logs)');
+              }
               logger.error(
                 `[PROTECTION] SL placed but no order ID extracted on ${exchangeName} ${symbol}: ` +
                 `price=${order.price} qty=${qty} side=${order.side} ` +
@@ -191,6 +197,12 @@ router.post('/', async (req, res) => {
             );
             const tpOrderId = _extractOrderId(tpResult);
             if (!tpOrderId) {
+              const tradierErr = tpResult._tradierError;
+              if (tradierErr && Array.isArray(tradierErr)) {
+                result.errors.push(...tradierErr.map(e => `Tradier: ${e}`));
+              } else {
+                result.errors.push('Tradier: no order ID (see Sparky logs)');
+              }
               logger.error(
                 `[PROTECTION] TP placed but no order ID extracted on ${exchangeName} ${symbol}: ` +
                 `price=${order.price} qty=${qty} side=${order.side} ` +

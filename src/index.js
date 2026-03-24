@@ -495,25 +495,26 @@ app.get('/positions', (req, res) => {
  * Used by SignalStudio's trade sync endpoint and Testnet Execution Router
  * 
  * Supports multiple exchanges: aster (default), oanda, tradier
- * Query params: environment, userId, exchange (defaults to 'aster')
+ * Query params: environment, userId, exchange (defaults to 'aster'), credential_id (optional, for credential isolation)
  */
 app.get('/positions/exchange', async (req, res) => {
   try {
     const environment = req.query.environment || 'production';
     const exchangeName = (req.query.exchange || 'aster').toLowerCase();
     const userId = req.query.userId || null;
+    const credentialId = req.query.credential_id || null;
     let api = null;
 
-    // For production aster, use the pre-initialized instance
-    if (exchangeName === 'aster' && environment === 'production') {
+    // For production aster, use the pre-initialized instance (only when no credential_id for credential isolation)
+    if (exchangeName === 'aster' && environment === 'production' && !credentialId) {
       api = asterApi;
     }
     
     // For testnet or non-aster exchanges, dynamically create an API instance
     if (!api) {
-      if (userId) {
-        logger.info(`📡 Fetching ${exchangeName} ${environment} positions for user ${userId}...`);
-        api = await ExchangeFactory.createExchangeForUser(userId, exchangeName, environment);
+      if (userId || credentialId) {
+        logger.info(`📡 Fetching ${exchangeName} ${environment} positions for user ${userId || 'credential'}...`);
+        api = await ExchangeFactory.createExchangeForUser(userId, exchangeName, environment, credentialId);
       } else {
         // Load credentials without requiring a specific userId
         const { getExchangeCredentialsByEnvironment } = require('./supabaseClient');

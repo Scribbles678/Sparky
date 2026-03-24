@@ -294,8 +294,9 @@ class TradierAPI extends BaseExchangeAPI {
     // Tradier returns { order: { id: 12345, status: "ok" } } on success
     // or { errors: { error: ["..."] } } on failure
     const orderId = response.order?.id || response.order?.order_id;
+    const errorMsg = response.errors?.error || response.errors;
+    const errorArr = Array.isArray(errorMsg) ? errorMsg : (errorMsg ? [errorMsg] : []);
     if (!orderId) {
-      const errorMsg = response.errors?.error || response.errors || 'Unknown error';
       logger.error('Tradier stop loss placement failed — no order ID returned', {
         symbol, side, quantity, stopPrice,
         response: JSON.stringify(response),
@@ -306,6 +307,7 @@ class TradierAPI extends BaseExchangeAPI {
     return {
       orderId,
       status: response.order?.status || 'pending',
+      ...(errorArr.length ? { _tradierError: errorArr } : {}),
     };
   }
 
@@ -329,8 +331,9 @@ class TradierAPI extends BaseExchangeAPI {
     const response = await this.makeRequest('POST', `/accounts/${this.accountId}/orders`, orderData);
 
     const orderId = response.order?.id || response.order?.order_id;
+    const errorMsg = response.errors?.error || response.errors;
+    const errorArr = Array.isArray(errorMsg) ? errorMsg : (errorMsg ? [errorMsg] : []);
     if (!orderId) {
-      const errorMsg = response.errors?.error || response.errors || 'Unknown error';
       logger.error('Tradier take profit placement failed — no order ID returned', {
         symbol, side, quantity, takeProfitPrice,
         response: JSON.stringify(response),
@@ -341,6 +344,7 @@ class TradierAPI extends BaseExchangeAPI {
     return {
       orderId,
       status: response.order?.status || 'pending',
+      ...(errorArr.length ? { _tradierError: errorArr } : {}),
     };
   }
 
