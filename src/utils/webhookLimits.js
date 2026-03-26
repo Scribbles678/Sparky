@@ -25,6 +25,19 @@ const SUBSCRIPTION_CACHE_TTL = 60000; // 1 minute
 const webhookCountCache = new Map();
 const COUNT_CACHE_TTL = 30000; // 30 seconds
 
+/** Match SignalStudio usage API: Free | Basic | Premium | Pro | Admin */
+function normalizeSubscriptionPlan(raw) {
+  if (raw == null || typeof raw !== 'string') return 'Free';
+  const t = raw.trim();
+  if (!t) return 'Free';
+  return t.charAt(0).toUpperCase() + t.slice(1).toLowerCase();
+}
+
+function isUnlimitedWebhookPlan(plan) {
+  const p = normalizeSubscriptionPlan(plan);
+  return p === 'Pro' || p === 'Admin';
+}
+
 // Redis client (optional, lazy-loaded)
 let redisClient = null;
 
@@ -68,7 +81,7 @@ async function getUserSubscriptionPlan(userId) {
     try {
       const cached = await redisClient.get(cacheKey);
       if (cached) {
-        return cached;
+        return normalizeSubscriptionPlan(cached);
       }
     } catch (error) {
       logger.debug('[WebhookLimits] Redis cache miss:', error.message);
@@ -78,7 +91,7 @@ async function getUserSubscriptionPlan(userId) {
   // Try in-memory cache
   const memCached = subscriptionCache.get(userId);
   if (memCached && memCached.expiry > Date.now()) {
-    return memCached.plan;
+    return normalizeSubscriptionPlan(memCached.plan);
   }
 
   // Fetch from database
@@ -94,8 +107,7 @@ async function getUserSubscriptionPlan(userId) {
       .rpc('get_user_subscription_plan_safe', { p_user_id: userId });
 
     if (!functionError && planFromFunction) {
-      const plan = planFromFunction;
-      // Cache it
+      const plan = normalizeSubscriptionPlan(planFromFunction);
       cacheSubscriptionPlan(userId, plan);
       logger.debug(`[WebhookLimits] Got plan from function for user ${userId}: ${plan}`);
       return plan;
@@ -108,11 +120,11 @@ async function getUserSubscriptionPlan(userId) {
       .from('subscriptions')
       .select('plan')
       .eq('user_id', userId)
-      .eq('status', 'active')
+      .in('status', ['active', 'trialing'])
       .maybeSingle();
 
     if (!activeError && activeSub && activeSub.plan) {
-      const plan = activeSub.plan;
+      const plan = normalizeSubscriptionPlan(activeSub.plan);
       cacheSubscriptionPlan(userId, plan);
       logger.debug(`[WebhookLimits] Got plan from table for user ${userId}: ${plan}`);
       return plan;
@@ -133,15 +145,14 @@ async function getUserSubscriptionPlan(userId) {
  * Cache subscription plan
  */
 function cacheSubscriptionPlan(userId, plan) {
-  // Cache in Redis (1 min TTL - short TTL to catch plan changes quickly)
+  const normalized = normalizeSubscriptionPlan(plan);
   ensureRedisInitialized();
   if (redisClient) {
-    redisClient.setex(`sub:${userId}`, 60, plan).catch(() => {});
+    redisClient.setex(`sub:${userId}`, 60, normalized).catch(() => {});
   }
 
-  // Cache in memory as fallback
   subscriptionCache.set(userId, {
-    plan,
+    plan: normalized,
     expiry: Date.now() + SUBSCRIPTION_CACHE_TTL,
   });
 }
@@ -277,14 +288,16 @@ function cacheWebhookCount(userId, count, monthStart, monthId) {
  * @returns {number} Monthly webhook limit
  */
 function getWebhookLimit(plan) {
+  const p = normalizeSubscriptionPlan(plan);
   const limits = {
-    Pro: 999999999, // Unlimited
+    Pro: Number.MAX_SAFE_INTEGER,
+    Admin: Number.MAX_SAFE_INTEGER,
     Premium: 300,
     Basic: 75,
     Free: 5,
   };
 
-  return limits[plan] || limits.Free;
+  return limits[p] ?? limits.Free;
 }
 
 /**
@@ -335,12 +348,13 @@ async function checkWebhookLimit(userId) {
     const plan = await getUserSubscriptionPlan(userId);
     const limit = getWebhookLimit(plan);
 
-    // Pro plan is unlimited
-    if (plan === 'Pro') {
+    // Pro / Admin: skip RPC (avoids DB functions keyed on exact plan strings) — always allow
+    if (isUnlimitedWebhookPlan(plan)) {
+      const current = await getWebhookCountThisMonth(userId);
       return {
         allowed: true,
-        current: 0,
-        limit,
+        current,
+        limit: -1,
         plan,
       };
     }
